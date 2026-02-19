@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Resultado {{LOTERICA}} - {{HORARIO}}</title>
+</head>
+
+<body
+    style="margin: 0; padding: 0; background-color: #ffffff; color: #1a1a1a; font-family: 'Inter', -apple-system, sans-serif; -webkit-font-smoothing: antialiased; display: flex; justify-content: center;">
+
+    <div
+        style="display: flex; flex-direction: column; width: 100%; max-width: 700px; overflow: hidden; background-color: #ffffff;">
+
+        <!-- Header -->
+        <div
+            style="display: flex; flex-direction: column; align-items: center; padding: 32px 16px; background: linear-gradient(135deg, #0d0d0d, #262626); color: #ffffff; text-align: center;">
+            <div
+                style="font-size: 24px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: #22c55e; margin-bottom: 8px;">
+                {{LOTERICA}}</div>
+            <div style="font-size: 56px; font-weight: 900; line-height: 1;">{{HORARIO}}</div>
+            <div
+                style="font-size: 20px; font-weight: 500; opacity: 0.8; margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px; width: 200px;">
+                {{DATA}}</div>
+        </div>
+
+        <!-- Tabela -->
+        <div style="display: flex; flex-direction: column; width: 100%;">
+
+            <!-- Cabeçalho Tabela -->
+            <div
+                style="display: flex; flex-direction: row; background-color: #1a1a1a; border-bottom: 2px solid #22c55e;">
+                <div
+                    style="display: flex; width: 20%; padding: 20px 4px; justify-content: center; font-weight: 800; font-size: 18px; color: #ffffff; text-transform: uppercase;">
+                    Pos</div>
+                <div
+                    style="display: flex; width: 35%; padding: 20px 4px; justify-content: center; font-weight: 800; font-size: 18px; color: #ffffff; text-transform: uppercase;">
+                    Milhar</div>
+                <div
+                    style="display: flex; width: 15%; padding: 20px 4px; justify-content: center; font-weight: 800; font-size: 18px; color: #ffffff; text-transform: uppercase;">
+                    Gr.</div>
+                <div
+                    style="display: flex; width: 30%; padding: 20px 4px; justify-content: center; font-weight: 800; font-size: 18px; color: #ffffff; text-transform: uppercase;">
+                    Bicho</div>
+            </div>
+
+            <!-- Prêmios -->
+            <div style="display: flex; flex-direction: column;">
+                {{PREMIOS}}
+            </div>
+        </div>
+
+        <!-- Footer / Branding -->
+        <div
+            style="display: flex; justify-content: center; align-items: center; padding: 24px; border-top: 1px solid #f3f4f6; background-color: #fafafa;">
+            <div style="font-size: 14px; color: #9ca3af; font-weight: 700; letter-spacing: 1px;">WWW.JOGODOBICHO.VIPS
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
+
+<!-- PREMIO_ROW -->
+<div
+    style="display: flex; flex-direction: row; width: 100%; border-bottom: 1px solid #eeeeee; background-color: {{ROW_BG}};">
+    <div
+        style="display: flex; width: 20%; padding: 24px 4px; justify-content: center; align-items: center; font-size: 28px; color: #6b7280; font-weight: 700;">
+        {{POSICAO}}º</div>
+    <div
+        style="display: flex; width: 35%; padding: 24px 4px; justify-content: center; align-items: center; font-size: 42px; color: #000000; font-weight: 900; letter-spacing: 1px;">
+        {{MILHAR}}</div>
+    <div
+        style="display: flex; width: 15%; padding: 24px 4px; justify-content: center; align-items: center; font-size: 28px; color: #4b5563; font-weight: 600;">
+        {{GRUPO}}</div>
+    <div
+        style="display: flex; width: 30%; padding: 24px 4px; justify-content: center; align-items: center; font-size: 32px; color: #1a1a1a; font-weight: 700; text-transform: capitalize;">
+        {{BICHO}}</div>
+</div>
+<!-- /PREMIO_ROW -->

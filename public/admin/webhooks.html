@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webhooks | Admin</title>
+    <link rel="stylesheet" href="/css/admin-theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        .webhook-card {
+            transition: transform 0.2s;
+        }
+
+        .webhook-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            backdrop-filter: blur(8px);
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #0a0a0a;
+            border: 1px solid var(--border-main);
+            border-radius: 16px;
+            max-width: 800px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 32px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+        }
+
+        .lotericas-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
+            margin: 20px 0;
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 16px;
+            background: #050505;
+            border-radius: 12px;
+            border: 1px solid var(--border-main);
+        }
+
+        .loterica-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            background: #111;
+            border-radius: 8px;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+
+        .loterica-item:hover {
+            background: #181818;
+            border-color: var(--accent-green);
+        }
+
+        .loterica-item input {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent-green);
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <header class="page-header">
+            <div class="page-title">
+                <h1>Webhooks & Notificações</h1>
+                <p>Configure URLs externas para receber resultados em tempo real.</p>
+            </div>
+        </header>
+
+        <section>
+            <div class="card">
+                <h3 class="mb-20">Novo Webhook</h3>
+                <div class="flex gap-10">
+                    <input type="url" id="urlInput" placeholder="https://seu-sistema.com.br/api/callback" class="w-full"
+                        aria-label="URL do Webhook">
+                    <button onclick="addWebhook()" class="primary" style="white-space: nowrap;">
+                        <i>➕</i> Registrar Webhook
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <section class="mt-40">
+            <h3 class="mb-20">Webhooks Ativos</h3>
+            <div id="webhookList" class="grid grid-1">
+                <div class="card text-center text-muted" style="padding: 60px;">Carregando webhooks...</div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal Config -->
+    <div id="configModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="justify-between items-center flex mb-20">
+                <h3>Configurar Filtros de Lotéricas</h3>
+                <button onclick="closeModal('configModal')" class="secondary"
+                    style="padding: 5px 12px;">&times;</button>
+            </div>
+            <p class="text-secondary mb-20">Selecione quais lotéricas irão disparar este webhook.</p>
+            <button class="secondary w-full mb-10" onclick="toggleAllLotericas()">Inverter Seleção</button>
+            <div id="lotericasContainer" class="lotericas-grid"></div>
+            <div class="flex gap-10 mt-20 justify-between">
+                <button class="secondary" onclick="closeModal('configModal')">Cancelar</button>
+                <button class="primary" onclick="saveLotericasConfig()">Salvar Configurações</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Histórico -->
+    <div id="historyModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="justify-between items-center flex mb-20">
+                <h3>Histórico de Envios</h3>
+                <button onclick="closeModal('historyModal')" class="secondary"
+                    style="padding: 5px 12px;">&times;</button>
+            </div>
+            <div id="historyContainer" class="table-container">
+                <table class="w-full mt-20">
+                    <thead>
+                        <tr>
+                            <th>Evento</th>
+                            <th>Status</th>
+                            <th>Data/Hora</th>
+                            <th>Resposta</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/admin/admin-common.js"></script>
+    <script>
+        const API_URL = '/v1/webhooks';
+        let currentWebhookId = null;
+        let selectedLotericas = [];
+
+        async function loadWebhooks() {
+            try {
+                const res = await window.fetchAdmin(`${API_URL}/with-config`);
+                const webhooks = await res.json();
+                const list = document.getElementById('webhookList');
+
+                if (webhooks.length === 0) {
+                    list.innerHTML = '<div class="card text-center text-muted" style="padding: 60px;">Nenhum webhook registrado.</div>';
+                    return;
+                }
+
+                list.innerHTML = webhooks.map(w => {
+                    const activeCount = w.lotericas.filter(l => l.enabled).length;
+                    return `
+                        <div class="card webhook-card">
+                            <div class="flex justify-between items-start mb-20">
+                                <div>
+                                    <code class="text-success font-bold" style="font-size: 1.1rem; background: transparent; padding: 0;">${w.url}</code>
+                                    <div class="text-muted mt-10" style="font-size: 0.8rem;">UUID: ${w.id}</div>
+                                    <div class="badge ${activeCount > 0 ? 'badge-success' : 'badge-warning'} mt-10">
+                                        ${activeCount} lotéricas monitoradas
+                                    </div>
+                                </div>
+                                <div class="flex gap-10">
+                                    <button class="secondary" onclick="openConfigModal('${w.id}')"><i>⚙️</i></button>
+                                    <button class="secondary" onclick="testWebhook('${w.id}')"><i>⚡</i></button>
+                                    <button class="secondary" onclick="openHistoryModal('${w.id}')"><i>🕒</i></button>
+                                    <button class="secondary text-error" onclick="deleteWebhook('${w.id}')"><i>🗑️</i></button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) {
+                UI.toast('Erro ao carregar webhooks', 'error');
+            }
+        }
+
+        async function addWebhook() {
+            const input = document.getElementById('urlInput');
+            const url = input.value;
+            if (!url) return;
+
+            try {
+                const res = await window.fetchAdmin(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                if (res.ok) {
+                    input.value = '';
+                    UI.toast('Webhook registrado com sucesso!');
+                    loadWebhooks();
+                }
+            } catch (err) {
+                UI.toast('Erro ao registrar', 'error');
+            }
+        }
+
+        async function openConfigModal(id) {
+            currentWebhookId = id;
+            try {
+                const res = await window.fetchAdmin(`${API_URL}/${id}`);
+                const webhook = await res.json();
+                selectedLotericas = webhook.lotericas.filter(l => l.enabled).map(l => l.slug);
+
+                const container = document.getElementById('lotericasContainer');
+                container.innerHTML = webhook.lotericas.map(l => `
+                    <label class="loterica-item">
+                        <input type="checkbox" value="${l.slug}" ${selectedLotericas.includes(l.slug) ? 'checked' : ''} onchange="updateLoterica('${l.slug}', this.checked)">
+                        <span>${l.nome}</span>
+                    </label>
+                `).join('');
+
+                document.getElementById('configModal').classList.add('active');
+            } catch (err) { UI.toast('Erro ao carregar config', 'error'); }
+        }
+
+        function updateLoterica(slug, checked) {
+            if (checked) selectedLotericas.push(slug);
+            else selectedLotericas = selectedLotericas.filter(s => s !== slug);
+        }
+
+        function toggleAllLotericas() {
+            const cbs = document.querySelectorAll('#lotericasContainer input');
+            const allChecked = Array.from(cbs).every(c => c.checked);
+            cbs.forEach(c => {
+                c.checked = !allChecked;
+                updateLoterica(c.value, !allChecked);
+            });
+        }
+
+        async function saveLotericasConfig() {
+            try {
+                await window.fetchAdmin(`${API_URL}/${currentWebhookId}/lotericas`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lotericas: selectedLotericas })
+                });
+                UI.toast('Configuração salva!');
+                closeModal('configModal');
+                loadWebhooks();
+            } catch (err) { UI.toast('Erro ao salvar', 'error'); }
+        }
+
+        async function openHistoryModal(id) {
+            try {
+                const res = await window.fetchAdmin(`${API_URL}/${id}/history?limit=20`);
+                const history = await res.json();
+                const tbody = document.getElementById('history-table-body');
+
+                tbody.innerHTML = history.map(h => `
+                    <tr>
+                        <td class="font-bold">${h.event}</td>
+                        <td><span class="badge ${h.status === 'success' ? 'badge-success' : 'badge-error'}">${h.status}</span></td>
+                        <td class="text-secondary">${new Date(h.created_at).toLocaleString('pt-BR')}</td>
+                        <td class="font-mono text-muted text-secondary" style="font-size: 0.75rem;">${h.status_code || '-'}</td>
+                    </tr>
+                `).join('');
+                document.getElementById('historyModal').classList.add('active');
+            } catch (err) { UI.toast('Erro ao carregar histórico', 'error'); }
+        }
+
+        async function testWebhook(id) {
+            UI.toast('Enviando teste...', 'info');
+            try {
+                const res = await window.fetchAdmin(`${API_URL}/${id}/test`, { method: 'POST' });
+                const result = await res.json();
+                if (res.ok) UI.toast(`Teste bem sucedido! HTTP ${result.http_code}`);
+                else UI.toast(`Falha no teste: ${result.message}`, 'error');
+            } catch (err) { UI.toast('Erro na conexão', 'error'); }
+        }
+
+        async function deleteWebhook(id) {
+            if (!confirm('Deseja excluir este webhook?')) return;
+            try {
+                await window.fetchAdmin(`${API_URL}/${id}`, { method: 'DELETE' });
+                UI.toast('Removido');
+                loadWebhooks();
+            } catch (err) { UI.toast('Erro ao excluir', 'error'); }
+        }
+
+        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+        loadWebhooks();
+    </script>
+</body>
+
+</html>

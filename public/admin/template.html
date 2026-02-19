@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Designer | Admin</title>
+    <link rel="stylesheet" href="/css/admin-theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        .editor-layout {
+            display: flex;
+            gap: 24px;
+            height: calc(100vh - 180px);
+            min-height: 600px;
+        }
+
+        .editor-pane {
+            flex: 1.2;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .preview-pane {
+            flex: 0.8;
+            display: flex;
+            flex-direction: column;
+            background: #080808;
+            border-radius: 16px;
+            border: 1px solid var(--border-main);
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        textarea {
+            flex: 1;
+            background: #050505;
+            color: #a5d6a7;
+            border: 1px solid var(--border-main);
+            border-radius: 12px;
+            padding: 20px;
+            font-family: 'Fira Code', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+        }
+
+        textarea:focus {
+            border-color: var(--accent-green);
+            box-shadow: 0 0 0 3px rgba(0, 230, 118, 0.1);
+        }
+
+        .preview-box {
+            width: 350px;
+            height: 600px;
+            background: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+            transform: scale(0.9);
+            transform-origin: top center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        iframe {
+            width: 700px;
+            height: 1200px;
+            border: none;
+            transform: scale(0.5);
+            transform-origin: top left;
+        }
+
+        .label-badge {
+            background: #111;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <header class="page-header">
+            <div class="page-title">
+                <h1>Designer de Imagens</h1>
+                <p>Customize o template HTML/CSS para geração automática de resultados.</p>
+            </div>
+            <div class="page-actions">
+                <span id="status" class="text-secondary mr-10" style="font-size: 0.85rem;"></span>
+                <button class="secondary" onclick="updatePreview()"><i>🔄</i> Preview</button>
+                <button class="primary" onclick="saveTemplate()"><i>💾</i> Salvar Template</button>
+            </div>
+        </header>
+
+        <div class="editor-layout">
+            <div class="editor-pane">
+                <div class="flex justify-between items-center mb-10 px-10">
+                    <span class="label-badge">Editor HTML (Satori Compatible)</span>
+                    <span class="text-muted" style="font-size: 0.75rem;">Variáveis: {{DATA}}, {{PREMIOS}},
+                        {{LOTERICA}}</span>
+                </div>
+                <textarea id="codeEditor" spellcheck="false" placeholder="<!-- Digite seu HTML aqui -->"></textarea>
+            </div>
+
+            <div class="preview-pane">
+                <div class="text-center mb-20">
+                    <span class="label-badge">Visualização em Tempo Real</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <div class="preview-box">
+                        <iframe id="iframePreview"></iframe>
+                    </div>
+                    <div class="mt-40 text-center">
+                        <span class="label-badge mb-20">PNG Gerado (700px)</span>
+                        <img id="imagePreview" style="width: 315px; border-radius: 4px; border: 1px solid #222;"
+                            alt="Carregando..." />
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/admin/admin-common.js"></script>
+    <script>
+        const EDITOR = document.getElementById('codeEditor');
+        const IFRAME = document.getElementById('iframePreview');
+        const IMG = document.getElementById('imagePreview');
+        const STATUS = document.getElementById('status');
+
+        async function loadTemplate() {
+            try {
+                const res = await window.fetchAdmin('/admin/api/template');
+                const data = await res.json();
+                EDITOR.value = data.html;
+                updatePreview();
+            } catch (e) { UI.toast('Erro ao carregar', 'error'); }
+        }
+
+        async function updatePreview() {
+            const html = EDITOR.value;
+            if (!html) return;
+            STATUS.innerText = 'Sincronizando...';
+            try {
+                const res = await window.fetchAdmin('/admin/api/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ html })
+                });
+                const data = await res.json();
+                const iframeDoc = IFRAME.contentWindow.document;
+                iframeDoc.open();
+                iframeDoc.write(data.html);
+                iframeDoc.close();
+                IMG.src = data.image;
+                STATUS.innerText = 'Tudo certo';
+                setTimeout(() => STATUS.innerText = '', 2000);
+            } catch (e) { STATUS.innerText = 'Erro no preview'; }
+        }
+
+        async function saveTemplate() {
+            UI.toast('Salvando...', 'info');
+            try {
+                const res = await window.fetchAdmin('/admin/api/template', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ html: EDITOR.value })
+                });
+                if (res.ok) UI.toast('Template salvo com sucesso!');
+                else UI.toast('Erro ao salvar', 'error');
+            } catch (e) { UI.toast('Erro de conexão', 'error'); }
+        }
+
+        let timeout;
+        EDITOR.addEventListener('input', () => {
+            clearTimeout(timeout);
+            timeout = setTimeout(updatePreview, 1000);
+        });
+
+        loadTemplate();
+    </script>
+</body>
+
+</html>

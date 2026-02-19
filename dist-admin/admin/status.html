@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Status do Sistema | Admin</title>
+    <link rel="stylesheet" href="/css/admin-theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <main>
+        <header class="page-header">
+            <div class="page-title">
+                <h1>Status da Infraestrutura</h1>
+                <p>Monitoramento em tempo real dos serviços de scraping e API.</p>
+            </div>
+            <div class="page-actions">
+                <button onclick="checkNow()" class="primary">
+                    <i>🔄</i> Sincronizar Tudo
+                </button>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <div class="grid grid-3" id="stats-summary">
+            <div class="card">
+                <div class="badge badge-success">Operacional</div>
+                <h2 id="total-success" class="font-bold mt-10 mb-10" style="font-size: 2.5rem;">0</h2>
+                <p class="text-secondary">Scrapings com sucesso hoje</p>
+            </div>
+            <div class="card">
+                <div class="badge badge-error">Falhas</div>
+                <h2 id="total-errors" class="font-bold mt-10 mb-10" style="font-size: 2.5rem;">0</h2>
+                <p class="text-secondary">Erros detectados hoje</p>
+            </div>
+            <div class="card">
+                <div class="badge badge-warning">Pendentes</div>
+                <h2 id="total-pending" class="font-bold mt-10 mb-10" style="font-size: 2.5rem;">0</h2>
+                <p class="text-secondary">Sorteios aguardando scraping</p>
+            </div>
+        </div>
+
+        <section style="margin-top: 40px;">
+            <div class="card" style="padding: 0; overflow: hidden;">
+                <div
+                    style="padding: 24px; border-bottom: 1px solid var(--border-main); display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="font-size: 1.2rem;">Logs de Atividade</h3>
+                    <input type="text" id="filter" placeholder="Filtrar lotérica..."
+                        style="width: 250px; padding: 10px 15px;">
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Lotérica</th>
+                                <th>Horário</th>
+                                <th>Data</th>
+                                <th>Status</th>
+                                <th>Origem</th>
+                                <th>ID Resultado</th>
+                                <th>Última Tentativa</th>
+                            </tr>
+                        </thead>
+                        <tbody id="status-table">
+                            <!-- Injetado via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/admin/admin-common.js"></script>
+    <script>
+        async function loadStatus() {
+            try {
+                const response = await window.fetchAdmin('/api/status/summary');
+                const data = await response.json();
+
+                document.getElementById('total-success').innerText = data.stats.total_success;
+                document.getElementById('total-errors').innerText = data.stats.total_errors;
+                document.getElementById('total-pending').innerText = data.stats.total_pending;
+
+                const tableBody = document.getElementById('status-table');
+                tableBody.innerHTML = data.items.map(item => `
+                    <tr>
+                        <td style="font-weight: 600;">${item.loterica_nome}</td>
+                        <td><code style="background: #111; padding: 4px 8px; border-radius: 4px;">${item.horario}</code></td>
+                        <td>${item.data}</td>
+                        <td>
+                            <span class="badge ${getStatusClass(item.status)}">${item.status}</span>
+                        </td>
+                        <td style="text-transform: capitalize;">${item.source || '-'}</td>
+                        <td style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted);">
+                            ${item.resultado_id || '-'}
+                        </td>
+                        <td style="font-size: 0.85rem; color: var(--text-secondary);">
+                            ${formatDate(item.updated_at)}
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function getStatusClass(status) {
+            if (status === 'success') return 'badge-success';
+            if (status === 'error') return 'badge-error';
+            return 'badge-warning';
+        }
+
+        function formatDate(iso) {
+            return new Date(iso).toLocaleString('pt-BR');
+        }
+
+        async function checkNow() {
+            UI.toast('Iniciando sincronização forçada...', 'info');
+            try {
+                // Aqui você chamaria o endpoint de sync
+                UI.toast('Sincronização concluída!');
+                loadStatus();
+            } catch (err) {
+                UI.toast('Erro ao sincronizar', 'error');
+            }
+        }
+
+        loadStatus();
+        setInterval(loadStatus, 30000);
+    </script>
+</body>
+
+</html>

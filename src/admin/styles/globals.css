@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.577 0.245 27.325);
+    --border: oklch(0 0 0);
+    /* Black borders for Brutalism */
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0 0 0);
+
+    /* Brutalist Overrides */
+    --radius: 0;
+    --radius-sm: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
+    --radius-xl: 0;
+
+    --shadow-brutal: 4px 4px 0px 0px rgba(0, 0, 0, 1);
+    --shadow-brutal-lg: 8px 8px 0px 0px rgba(0, 0, 0, 1);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.145 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.145 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.488 0.243 264.376);
+    /* Purple/Indigo accent */
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --border: oklch(1 0 0);
+    --shadow-brutal: 4px 4px 0px 0px rgba(255, 255, 255, 0.2);
+}
+
+@theme inline {
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-border: var(--border);
+    --shadow-brutal: var(--shadow-brutal);
+    --shadow-brutal-lg: var(--shadow-brutal-lg);
+    --radius-none: 0;
+}
+
+@layer base {
+    * {
+        @apply border-border;
+        border-width: 2px;
+    }
+
+    body {
+        @apply bg-background text-foreground;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+        @apply font-black uppercase tracking-tighter;
+    }
+}
+
+/* Custom Shadcn Overrides for Brutalism */
+.brutal-card {
+    @apply bg-white border-4 border-black shadow-brutal transition-transform hover:-translate-x-1 hover:-translate-y-1 active:translate-x-0 active:translate-y-0;
+}
+
+.brutal-btn {
+    @apply bg-primary text-primary-foreground border-4 border-black font-black uppercase px-6 py-3 shadow-brutal hover:bg-primary/90 active:shadow-none active:translate-x-1 active:translate-y-1;
+}

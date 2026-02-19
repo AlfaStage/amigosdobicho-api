@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proxies | Admin</title>
+    <link rel="stylesheet" href="/css/admin-theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        .source-chip {
+            padding: 6px 12px;
+            border-radius: 8px;
+            background: #111;
+            border: 1px solid var(--border-main);
+            font-size: 0.8rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-chip .count {
+            color: var(--accent-green);
+            font-weight: 700;
+        }
+
+        .tab-nav {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border-main);
+            padding-bottom: 10px;
+        }
+
+        .tab-nav button {
+            background: transparent;
+            border: none;
+            padding: 8px 16px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .tab-nav button.active {
+            color: var(--accent-green);
+            border-bottom: 2px solid var(--accent-green);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+        <header class="page-header">
+            <div class="page-title">
+                <h1>Infraestrutura de Proxies</h1>
+                <p>Monitoramento e coleta automática de proxies para fallback de scraping.</p>
+            </div>
+            <div class="page-actions">
+                <button class="secondary" onclick="triggerCollect()" id="btnCollect">🔄 Coletar</button>
+                <button class="secondary" onclick="triggerTest()" id="btnTest">🧪 Testar</button>
+                <button class="primary" onclick="loadData()">📊 Atualizar</button>
+            </div>
+        </header>
+
+        <div class="grid grid-4" id="statsGrid">
+            <div class="card">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Total</div>
+                <h2 id="statTotal" class="mt-10">0</h2>
+            </div>
+            <div class="card">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Vivos</div>
+                <h2 id="statAlive" class="mt-10 text-success">0</h2>
+            </div>
+            <div class="card">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Taxa Sucesso</div>
+                <h2 id="statRate" class="mt-10">0%</h2>
+            </div>
+            <div class="card">
+                <div class="text-muted" style="font-size: 0.75rem; text-transform: uppercase;">Blacklist</div>
+                <h2 id="statBlacklist" class="mt-10 text-error">0</h2>
+            </div>
+        </div>
+
+        <div class="flex gap-10 mt-20 flex-wrap" id="sourceGrid"></div>
+
+        <section class="mt-40">
+            <div class="tab-nav">
+                <button onclick="switchTab('list', this)" class="active">📋 Lista</button>
+                <button onclick="switchTab('import', this)">📤 Importar</button>
+            </div>
+
+            <div id="tab-list" class="tab-content active">
+                <div class="card" style="padding:0; overflow:hidden;">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Proxy</th>
+                                    <th>Proto</th>
+                                    <th>Fonte</th>
+                                    <th>Latência</th>
+                                    <th>Sucesso</th>
+                                    <th>Último Teste</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="proxyList">
+                                <tr>
+                                    <td colspan="8" class="text-center text-muted" style="padding:40px;">Carregando...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="tab-import" class="tab-content">
+                <div class="card">
+                    <h3>Importação em Massa</h3>
+                    <p class="text-secondary mb-20">Cole a lista de proxies (host:port, user:pass@host:port, etc).</p>
+                    <textarea id="bulkText" rows="10" class="w-full mb-20"
+                        placeholder="proxy1.example.com:8080..."></textarea>
+                    <button class="primary" onclick="bulkImport()">Iniciar Importação</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/admin/admin-common.js"></script>
+    <script>
+        async function loadData() {
+            try {
+                const res = await window.fetchAdmin('/admin/proxies/list');
+                const data = await res.json();
+                renderStats(data.stats);
+                renderProxies(data.proxies);
+            } catch (err) { UI.toast('Erro ao carregar dados', 'error'); }
+        }
+
+        function renderStats(s) {
+            document.getElementById('statTotal').innerText = s.total;
+            document.getElementById('statAlive').innerText = s.alive;
+            document.getElementById('statBlacklist').innerText = s.blacklisted;
+            const total = s.total_success + s.total_errors;
+            document.getElementById('statRate').innerText = total > 0 ? ((s.total_success / total) * 100).toFixed(1) + '%' : '0%';
+
+            const sourceGrid = document.getElementById('sourceGrid');
+            sourceGrid.innerHTML = Object.entries(s.bySource || {}).map(([src, count]) => `
+                <div class="source-chip"><span>${src}</span> <span class="count">${count}</span></div>
+            `).join('');
+        }
+
+        function renderProxies(proxies) {
+            const tbody = document.getElementById('proxyList');
+            tbody.innerHTML = proxies.map(p => `
+                <tr>
+                    <td><span class="badge ${p.alive ? 'badge-success' : 'badge-error'}">${p.alive ? 'Online' : 'Offline'}</span></td>
+                    <td class="font-mono" style="font-size: 0.85rem;">${p.host}:${p.port}</td>
+                    <td><span class="badge" style="background: #222;">${p.protocol.toUpperCase()}</span></td>
+                    <td><span class="text-muted">${p.source || 'Manual'}</span></td>
+                    <td>${p.latency_ms ? `<span class="text-success">${p.latency_ms}ms</span>` : '-'}</td>
+                    <td><span class="text-success">${p.success_count}</span> / <span class="text-error">${p.error_count}</span></td>
+                    <td class="text-secondary" style="font-size: 0.8rem;">${p.last_tested_at ? new Date(p.last_tested_at).toLocaleString('pt-BR') : '-'}</td>
+                    <td><button class="secondary text-error" onclick="removeProxy('${p.id}')">🗑️</button></td>
+                </tr>
+            `).join('');
+        }
+
+        async function triggerCollect() {
+            UI.toast('Coleta de proxies iniciada...', 'info');
+            try {
+                const data = await (await window.fetchAdmin('/admin/proxies/collect', { method: 'POST' })).json();
+                UI.toast(`Coleta concluída! ${data.added} novos proxies.`);
+                loadData();
+            } catch (err) { UI.toast('Erro na coleta', 'error'); }
+        }
+
+        async function triggerTest() {
+            UI.toast('Iniciando testes de conectividade...', 'info');
+            try {
+                const data = await (await window.fetchAdmin('/admin/proxies/test-all', { method: 'POST' })).json();
+                UI.toast(`Testes finalizados! ${data.alive} vivos.`);
+                loadData();
+            } catch (err) { UI.toast('Erro nos testes', 'error'); }
+        }
+
+        async function removeProxy(id) {
+            if (!confirm('Excluir este proxy?')) return;
+            try {
+                await window.fetchAdmin(`/admin/proxies/${id}`, { method: 'DELETE' });
+                UI.toast('Removido');
+                loadData();
+            } catch (err) { UI.toast('Erro ao remover', 'error'); }
+        }
+
+        async function bulkImport() {
+            const text = document.getElementById('bulkText').value;
+            if (!text) return;
+            try {
+                const data = await (await window.fetchAdmin('/admin/proxies/bulk', { method: 'POST', body: JSON.stringify({ text }) })).json();
+                UI.toast(`${data.added} proxies importados!`);
+                loadData();
+                switchTab('list', document.querySelector('.tab-nav button'));
+            } catch (err) { UI.toast('Erro na importação', 'error'); }
+        }
+
+        function switchTab(tab, btn) {
+            document.querySelectorAll('.tab-nav button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('active');
+        }
+
+        loadData();
+        setInterval(loadData, 60000);
+    </script>
+</body>
+
+</html>
