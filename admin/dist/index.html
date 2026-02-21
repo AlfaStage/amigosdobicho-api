@@ -154,8 +154,22 @@ http://192.168.0.1:3128"
     </div>
 
     <script>
-        const API_KEY = 'amigos-do-bicho-secret-key';
-        const headers = { 'x-api-key': API_KEY, 'Content-Type': 'application/json' };
+        let API_KEY = localStorage.getItem('adb_api_key');
+        if (!API_KEY) {
+            API_KEY = prompt('🔒 Acesso Restrito\nDigite a API KEY do servidor:');
+            if (API_KEY) localStorage.setItem('adb_api_key', API_KEY);
+        }
+        const headers = { 'x-api-key': API_KEY || '', 'Content-Type': 'application/json' };
+
+        // Intercepta 401 Unauthorized para pedir a senha denovo
+        function checkAuth(res) {
+            if (res.status === 401) {
+                localStorage.removeItem('adb_api_key');
+                alert('API KEY Inválida ou Expirada! A página será atualizada.');
+                location.reload();
+            }
+            return res;
+        }
 
         // ========== NAV ==========
         document.querySelectorAll('.nav-link[data-page]').forEach(el => {
@@ -174,14 +188,14 @@ http://192.168.0.1:3128"
         // ========== STATUS ==========
         async function loadStatus() {
             try {
-                const r = await fetch('/api/status/hoje', { headers });
+                const r = await fetch('/api/status/hoje', { headers }).then(checkAuth);
                 const d = await r.json();
                 document.getElementById('status-cards').innerHTML = `
       <div class="card stat-card"><div class="card-label">Total Dia</div><div class="card-value">${d.total_dia || 0}</div></div>
       <div class="card stat-card"><div class="card-label">Sucesso</div><div class="card-value green">${d.sucesso || 0}</div></div>
       <div class="card stat-card"><div class="card-label">Erro</div><div class="card-value red">${d.erro || 0}</div></div>
       <div class="card stat-card"><div class="card-label">Taxa</div><div class="card-value yellow">${d.taxa_sucesso || 0}%</div></div>`;
-                const p = await fetch('/api/status/painel', { headers });
+                const p = await fetch('/api/status/painel', { headers }).then(checkAuth);
                 const rows = await p.json();
                 const arr = Array.isArray(rows) ? rows : [];
                 document.getElementById('status-empty').classList.toggle('hidden', arr.length > 0);
@@ -194,7 +208,7 @@ http://192.168.0.1:3128"
 
         // ========== PROXIES ==========
         async function loadProxies() {
-            const r = await fetch('/api/proxies', { headers });
+            const r = await fetch('/api/proxies', { headers }).then(checkAuth);
             const data = await r.json();
             const arr = Array.isArray(data) ? data : [];
             document.getElementById('proxies-empty').classList.toggle('hidden', arr.length > 0);
@@ -217,7 +231,7 @@ http://192.168.0.1:3128"
             btn.textContent = 'Processando testes...';
             btn.disabled = true;
             try {
-                const r = await fetch('/api/proxies/bulk', { method: 'POST', headers, body: JSON.stringify({ text }) });
+                const r = await fetch('/api/proxies/bulk', { method: 'POST', headers, body: JSON.stringify({ text }) }).then(checkAuth);
                 const d = await r.json();
                 if (d.error) throw new Error(d.error);
 
@@ -232,8 +246,8 @@ http://192.168.0.1:3128"
                 btn.disabled = false;
             }
         }
-        async function deleteProxy(id) { await fetch('/api/proxies/' + id, { method: 'DELETE', headers }); loadProxies(); }
-        async function sweepProxies() { toast('Sweep iniciado...'); await fetch('/api/proxies/sweep', { method: 'POST', headers }); loadProxies(); toast('Sweep concluído!'); }
+        async function deleteProxy(id) { await fetch('/api/proxies/' + id, { method: 'DELETE', headers }).then(checkAuth); loadProxies(); }
+        async function sweepProxies() { toast('Sweep iniciado...'); await fetch('/api/proxies/sweep', { method: 'POST', headers }).then(checkAuth); loadProxies(); toast('Sweep concluído!'); }
 
         // ========== TEMPLATES ==========
         let currentTemplateType = 'resultado';
@@ -250,7 +264,7 @@ http://192.168.0.1:3128"
         async function loadTemplate(type) {
             document.getElementById('template-type-label').textContent = type;
             try {
-                const r = await fetch('/admin/api/template?type=' + type, { headers });
+                const r = await fetch('/admin/api/template?type=' + type, { headers }).then(checkAuth);
                 const d = await r.json();
                 document.getElementById('template-html').value = d.html_content || '';
                 // Auto-preview on load
@@ -308,13 +322,13 @@ http://192.168.0.1:3128"
 
         async function saveTemplate() {
             const html = document.getElementById('template-html').value;
-            await fetch('/admin/api/template', { method: 'POST', headers, body: JSON.stringify({ type: currentTemplateType, name: currentTemplateType, html_content: html }) });
+            await fetch('/admin/api/template', { method: 'POST', headers, body: JSON.stringify({ type: currentTemplateType, name: currentTemplateType, html_content: html }) }).then(checkAuth);
             toast('Template salvo!');
         }
 
         // ========== WEBHOOKS ==========
         async function loadWebhooks() {
-            const r = await fetch('/api/webhooks', { headers });
+            const r = await fetch('/api/webhooks', { headers }).then(checkAuth);
             const data = await r.json();
             const arr = Array.isArray(data) ? data : [];
             document.getElementById('webhooks-empty').classList.toggle('hidden', arr.length > 0);
@@ -334,22 +348,22 @@ http://192.168.0.1:3128"
         }
         function showAddWebhook() { document.getElementById('add-webhook-form').classList.toggle('hidden'); }
         async function addWebhook() {
-            await fetch('/api/webhooks', { method: 'POST', headers, body: JSON.stringify({ url: document.getElementById('webhook-url').value }) });
+            await fetch('/api/webhooks', { method: 'POST', headers, body: JSON.stringify({ url: document.getElementById('webhook-url').value }) }).then(checkAuth);
             document.getElementById('add-webhook-form').classList.add('hidden');
             loadWebhooks(); toast('Webhook criado!');
         }
-        async function deleteWebhook(id) { await fetch('/api/webhooks/' + id, { method: 'DELETE', headers }); loadWebhooks(); }
+        async function deleteWebhook(id) { await fetch('/api/webhooks/' + id, { method: 'DELETE', headers }).then(checkAuth); loadWebhooks(); }
         async function testWebhook(id) {
             toast('Testando...');
-            const r = await fetch('/api/webhooks/' + id + '/test', { method: 'POST', headers });
+            const r = await fetch('/api/webhooks/' + id + '/test', { method: 'POST', headers }).then(checkAuth);
             const d = await r.json();
             toast(d.success ? '✅ Webhook OK!' : '❌ Falhou: ' + (d.error || ''), d.success ? 'success' : 'error');
         }
-        async function reactivateWebhook(id) { await fetch('/api/webhooks/' + id + '/reactivate', { method: 'POST', headers }); loadWebhooks(); toast('Reativado!'); }
+        async function reactivateWebhook(id) { await fetch('/api/webhooks/' + id + '/reactivate', { method: 'POST', headers }).then(checkAuth); loadWebhooks(); toast('Reativado!'); }
         async function showLogs(id) {
             const el = document.getElementById('webhook-logs');
             el.classList.remove('hidden');
-            const r = await fetch('/api/webhooks/' + id + '/historico', { headers });
+            const r = await fetch('/api/webhooks/' + id + '/historico', { headers }).then(checkAuth);
             const logs = await r.json();
             document.getElementById('webhook-log-content').textContent = (Array.isArray(logs) ? logs : []).map(l =>
                 `[${l.created_at}] ${l.status.toUpperCase()} ${l.status_code || '-'} | ${l.event}\n${l.error_message || l.response_body || ''}`
