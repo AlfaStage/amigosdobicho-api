@@ -16,6 +16,7 @@ export interface ResultadoInput {
     horario: string;
     nome_original?: string;
     premios: PremioInput[];
+    disableWebhooks?: boolean;
 }
 
 /**
@@ -75,7 +76,7 @@ export function ingestResult(input: ResultadoInput): { saved: boolean; id?: stri
         log.success('DB', `Resultado salvo: ${slug} ${input.data} ${input.horario}`, { premios: input.premios.length });
 
         // Post-commit: check palpites premiados for ALL results of the day (retroactive scan)
-        checkPalpitesPremiados(input.data);
+        checkPalpitesPremiados(input.data, input.disableWebhooks);
 
         return { saved: true, id: resultadoId };
     } catch (err) {
@@ -89,7 +90,7 @@ export function ingestResult(input: ResultadoInput): { saved: boolean; id?: stri
  * Checks if any of today's palpites match the drawn results.
  * Scans ALL results of the given date to ensure retroactive prizes are captured.
  */
-export function checkPalpitesPremiados(data: string): void {
+export function checkPalpitesPremiados(data: string, disableWebhooks: boolean = false): void {
     const db = getDb();
 
     // Get today's palpite
@@ -123,23 +124,23 @@ export function checkPalpitesPremiados(data: string): void {
 
             // Milhar match
             if (milharesPalpite.includes(p.milhar)) {
-                insertPremiado(palpiteId, 'milhar', p.milhar, extracao, premioLabel, data, res.loterica_slug);
+                insertPremiado(palpiteId, 'milhar', p.milhar, extracao, premioLabel, data, res.loterica_slug, disableWebhooks);
             }
 
             // Centena match
             if (centenasPalpite.includes(centena)) {
-                insertPremiado(palpiteId, 'centena', centena, extracao, premioLabel, data, res.loterica_slug);
+                insertPremiado(palpiteId, 'centena', centena, extracao, premioLabel, data, res.loterica_slug, disableWebhooks);
             }
 
             // Grupo match (ANY POSITION 1-10)
             if (gruposPalpite.includes(grupo)) {
-                insertPremiado(palpiteId, 'grupo', `${calcularBicho(p.milhar)} (${String(grupo).padStart(2, '0')})`, extracao, premioLabel, data, res.loterica_slug);
+                insertPremiado(palpiteId, 'grupo', `${calcularBicho(p.milhar)} (${String(grupo).padStart(2, '0')})`, extracao, premioLabel, data, res.loterica_slug, disableWebhooks);
             }
         }
     }
 }
 
-function insertPremiado(palpiteId: string, tipo: string, numero: string, extracao: string, premio: string, data: string, slug: string): void {
+function insertPremiado(palpiteId: string, tipo: string, numero: string, extracao: string, premio: string, data: string, slug: string, disableWebhooks: boolean = false): void {
     const db = getDb();
     try {
         // Unique check: Strict check to avoid duplicate data AND duplicate webhooks
@@ -159,17 +160,19 @@ function insertPremiado(palpiteId: string, tipo: string, numero: string, extraca
         log.success('SCRAPER', `Premiado! ${tipo}: ${numero} em ${extracao} (${premio})`);
         saveDatabase();
 
-        // Dispatch individual Webhook for this specific hit
-        notifyAll('palpite.premiado', {
-            id,
-            palpite_id: palpiteId,
-            tipo,
-            numero,
-            extracao,
-            premio,
-            data,
-            loterica: slug
-        });
+        // Dispatch individual Webhook for this specific hit if allowed
+        if (!disableWebhooks) {
+            notifyAll('palpite.premiado', {
+                id,
+                palpite_id: palpiteId,
+                tipo,
+                numero,
+                extracao,
+                premio,
+                data,
+                loterica: slug
+            });
+        }
 
     } catch (err) {
         log.error('DB', 'Erro ao inserir premiado', err);

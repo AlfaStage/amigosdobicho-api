@@ -1,5 +1,4 @@
 import cron from 'node-cron';
-import { LOTERICAS } from '../config/lotericas.js';
 import { getDb, saveDatabase } from '../database/schema.js';
 import { todayStr } from '../utils/helpers.js';
 import { fetchAllResultados, fetchPalpites, savePalpites, fetchCotacoes, saveCotacoes } from './ScraperService.js';
@@ -7,243 +6,200 @@ import { ingestResult, type ResultadoInput } from './AmigosDoBichoService.js';
 import { notifyAll } from './WebhookService.js';
 import { runProxySweep } from './ProxyService.js';
 import { mapLotteryToSlug } from '../utils/helpers.js';
-import { calcularGrupo, calcularBicho } from '../config/bichos.js';
+import { getAllLotericas, learnOrGetLoterica, learnOrConfirmSchedule, penalizeSchedule } from './LotericasService.js';
+import crypto from 'crypto';
 import { log } from '../utils/Logger.js';
 
-const DELAY_MS = 60_000; // 1 minute delay after scheduled time
-
-/**
- * Initializes all cron jobs.
- */
 export function initCronJobs(): void {
-    log.separator('CRON', 'SCHEDULERS');
+    log.separator('CRON', 'SCHEDULERS V2 (ADAPTIVE)');
     log.info('CRON', 'Inicializando schedulers...');
 
-    // Every minute: check if any lottery draw should be fetched
-    cron.schedule('* * * * *', () => checkScheduledDraws());
+    // A cada 5 minutos: Adaptive Poller escaneará TODA a API em busca de novidades
+    cron.schedule('*/5 * * * *', () => adaptivePoller());
 
     // Morning 07:00: fetch palpites and cotações
     cron.schedule('0 7 * * *', () => morningRoutine());
+
+    // Meia-Noite e Um (00:01): Prepara o Dashboard do dia lendo do cérebro
+    cron.schedule('1 0 * * *', () => dailyForecastManager());
+
+    // Final do dia (23:55): Expurgador de fantasmas
+    cron.schedule('55 23 * * *', () => forgetStaleSchedules());
 
     // Every hour: proxy sweep
     cron.schedule('0 * * * *', () => {
         runProxySweep().catch(err => log.error('PROXY', 'Proxy sweep falhou', err));
     });
 
-    // Every 10 minutes: retry failed scraping
-    cron.schedule('*/10 * * * *', () => retryFailed());
-
-    // Último dia do mês às 23:00: auditoria de marketing e hot-swap
-    cron.schedule('0 23 28-31 * *', () => {
-        // Verifica se o dia seguinte é dia 1 (ou seja, hoje é o último dia do mês)
-        const amanhã = new Date();
-        amanhã.setDate(amanhã.getDate() + 1);
-
-        if (amanhã.getDate() === 1) {
-            log.info('CRON', 'Último dia do mês detectado. Executando checkup e Hot-Swap das lotéricas...');
-            import('./MarketingAuditService.js').then(module => {
-                module.MarketingAuditService.runAudit().catch(err => {
-                    log.error('CRON', 'Falha na auditoria mensal de marketing.', err);
-                });
-            }).catch(e => {
-                log.error('CRON', 'Erro ao carregar módulo MarketingAuditService.', e);
-            });
-        }
-    });
+    // Auditoria de marketing legada (REMOVIDA) na arquitetura V2
 
     log.info('CRON', 'Schedulers ativos:', {
-        draw_monitor: '1min',
+        adaptive_poller: '5min',
         morning_palpites: '07:00',
         proxy_sweep: '1h',
-        retry_failed: '10min',
-        monthly_audit: '23:00 ultimo dia_mes',
+        daily_forecast: '00:01',
+        forget_stale: '23:55'
     });
 }
 
 /**
- * Checks if any draw should be fetched right now.
+ * Motor passivo que extrai todos os resultados da API, independente do horário.
+ * Se a API entregou jogo novo, ele processa, cria uma lotérica dinamicamente, grava o horário e notifica.
  */
-async function checkScheduledDraws(): Promise<void> {
-    const now = new Date();
+async function adaptivePoller(): Promise<void> {
     const today = todayStr();
     const db = getDb();
 
-    const groupedByLottery: Record<string, string[]> = {};
-
-    for (const lot of LOTERICAS) {
-        for (const horarioObj of lot.horarios) {
-            const horarioStr = horarioObj.horario;
-
-            // Check if today's day of the week is allowed for this schedule
-            if (!horarioObj.dias.includes(now.getDay())) {
-                continue;
-            }
-
-            const [h, m] = horarioStr.split(':').map(Number);
-            const scheduled = new Date(now);
-            scheduled.setHours(h, m, 0, 0);
-
-            const elapsed = now.getTime() - scheduled.getTime();
-
-            // Window: between 1 min and 5 min after scheduled time
-            if (elapsed >= DELAY_MS && elapsed < 5 * 60_000) {
-                // Check if already processed
-                const statusRows = db.exec(
-                    "SELECT status FROM scraping_status WHERE loterica_slug = ? AND data = ? AND horario = ?",
-                    [lot.slug, today, horarioStr]
-                );
-
-                if (statusRows.length && statusRows[0].values.length) {
-                    const status = statusRows[0].values[0][0] as string;
-                    if (status === 'success') continue;
-                } else {
-                    // Create pending entry
-                    db.run(
-                        `INSERT OR IGNORE INTO scraping_status (id, loterica_slug, data, horario, status)
-             VALUES (?, ?, ?, ?, 'pending')`,
-                        [crypto.randomUUID(), lot.slug, today, horarioStr]
-                    );
-                }
-
-                if (!groupedByLottery[lot.slug]) groupedByLottery[lot.slug] = [];
-                groupedByLottery[lot.slug].push(horarioStr);
-            }
-        }
-    }
-
-    for (const [slug, horarios] of Object.entries(groupedByLottery)) {
-        const lot = LOTERICAS.find(l => l.slug === slug);
-        if (lot) {
-            await scrapeForLotteryGroup(lot.slug, lot.estado, today, horarios);
-        }
-    }
-}
-
-/**
- * Scrapes results for a specific lottery group (grouping missing times).
- */
-async function scrapeForLotteryGroup(slug: string, estado: string, data: string, horarios: string[]): Promise<void> {
-    const db = getDb();
-
     try {
-        log.info('SCRAPER', `Buscando ${slug} para ${data} ${horarios.join(', ')}...`, { estado });
+        log.info('SCRAPER', `[POLLER] Buscando payload completo da API para ${today}...`);
         const results = await fetchAllResultados();
-        const notFound: string[] = [];
 
-        for (const horario of horarios) {
-            let found = false;
+        if (!results || results.length === 0) {
+            log.warn('SCRAPER', '[POLLER] A API não retornou dados nesta passagem.');
+            return;
+        }
 
-            for (const r of results) {
-                const mappedSlug = mapLotteryToSlug(r.lottery || r.name || '', estado);
-                if (mappedSlug !== slug) continue;
+        let processados = 0;
+        let novosSalvos = 0;
+        const now = new Date();
+        const currentDayOfWeek = now.getDay();
 
-                // STRICT TIME MATCH: Validate result time from API against scheduled slot
-                const apiTime = r.time ? r.time.split(':').slice(0, 2).map((v: string) => v.padStart(2, '0')).join(':') : null;
-                const slotTime = horario.split(':').slice(0, 2).map(v => v.padStart(2, '0')).join(':');
+        for (const r of results) {
+            processados++;
 
-                if (apiTime && slotTime) {
-                    const [apiH, apiM] = apiTime.split(':').map(Number);
-                    const [slotH, slotM] = slotTime.split(':').map(Number);
-                    const diffMins = Math.abs((apiH * 60 + apiM) - (slotH * 60 + slotM));
+            let nomeOriginal = r.lottery || r.name || 'Desconhecida';
+            nomeOriginal = nomeOriginal.replace(/\b(nova|novo|loteria|da|de|do|dos|das|extração|extracao)\b/gi, '').replace(/\s+/g, ' ').trim();
+            const estado = r.state || r.estado || 'BR';
 
-                    if (diffMins > 35) {
-                        // Skip if the result is for a different time (tolerance of 35 mins for nominal vs actual draw time)
-                        continue;
-                    }
-                }
+            // 1. Descobre ou carrega a Lotérica do Banco
+            const lotSlug = mapLotteryToSlug(nomeOriginal, estado);
+            const loterica = learnOrGetLoterica(nomeOriginal, estado, lotSlug);
 
-                const premios = (r.results || r.prizes || r.premios || []).map((p: any, i: number) => ({
-                    posicao: p.premio || p.position || p.posicao || i + 1,
-                    milhar: String(p.milhar || p.number || p.numero || '').padStart(4, '0'),
-                }));
+            const apiTime = r.time ? r.time.split(':').slice(0, 2).map((v: string) => v.padStart(2, '0')).join(':') : null;
+            if (!apiTime) continue;
 
-                if (premios.length === 0) continue;
+            const normalizedTime = `${apiTime}:00`;
 
-                const input: ResultadoInput = {
-                    loterica: slug,
-                    estado,
-                    data,
-                    horario,
-                    nome_original: r.name || r.lottery || '',
-                    premios,
-                };
+            const premios = (r.results || r.prizes || r.premios || []).map((p: any, i: number) => ({
+                posicao: p.premio || p.position || p.posicao || i + 1,
+                milhar: String(p.milhar || p.number || p.numero || '').padStart(4, '0'),
+            }));
 
-                const result = ingestResult(input);
-                if (result.saved) {
-                    found = true;
-                    // Update scraping status
-                    db.run(
-                        `UPDATE scraping_status SET status = 'success', updated_at = datetime('now')
-               WHERE loterica_slug = ? AND data = ? AND horario = ?`,
-                        [slug, data, horario]
-                    );
-                    saveDatabase();
-                    log.success('SCRAPER', `Resultado salvo: ${slug} ${horario}`, { id: result.id });
+            if (premios.length === 0) continue;
 
-                    // Notify webhooks
-                    await notifyAll('resultado.novo', {
-                        loterica: slug, data, horario, resultado_id: result.id
-                    }).catch(() => { });
-                    break;
-                }
-            }
+            // 2. Tenta inserir na tabela de resultados finais
+            const input: ResultadoInput = {
+                loterica: lotSlug,
+                estado,
+                data: today,
+                horario: normalizedTime,
+                nome_original: nomeOriginal,
+                premios,
+            };
 
-            if (!found) {
+            const result = ingestResult(input);
+            if (result.saved) {
+                novosSalvos++;
+
+                // 3. Atualiza ou cria a expectativa no scraping_status
                 db.run(
-                    `UPDATE scraping_status SET status = 'retrying', tentativas = tentativas + 1,
-             updated_at = datetime('now') WHERE loterica_slug = ? AND data = ? AND horario = ?`,
-                    [slug, data, horario]
+                    `INSERT INTO scraping_status (id, loterica_slug, data, horario, status, updated_at)
+                     VALUES (?, ?, ?, ?, 'success', datetime('now'))
+                     ON CONFLICT(loterica_slug, data, horario) DO UPDATE SET 
+                        status = 'success', updated_at = datetime('now')`,
+                    [crypto.randomUUID(), lotSlug, today, normalizedTime]
                 );
-                saveDatabase();
-                notFound.push(horario);
+
+                // 4. Efetiva o Aprendizado / Recuperação de Status do Horário
+                learnOrConfirmSchedule(lotSlug, normalizedTime, currentDayOfWeek);
+
+                log.success('SCRAPER', `Novo Resultado Processado: ${lotSlug} ${normalizedTime}`, { id: result.id });
+
+                await notifyAll('resultado.novo', {
+                    loterica: lotSlug, data: today, horario: normalizedTime, resultado_id: result.id
+                }).catch(() => { });
             }
         }
 
-        if (notFound.length > 0) {
-            log.warn('SCRAPER', `⚠️  Resultado não encontrado: ${slug} ${notFound.join(', ')} (retrying)`);
+        if (novosSalvos > 0) {
+            saveDatabase();
         }
+        log.info('SCRAPER', `[POLLER] Fim da Varredura. ${processados} encontrados, ${novosSalvos} salvos no BD.`);
 
     } catch (err: any) {
-        log.error('SCRAPER', `Erro no scraping ${slug} ${horarios.join(', ')}`, err);
-        for (const h of horarios) {
-            db.run(
-                `UPDATE scraping_status SET status = 'error', ultimo_erro = ?,
-           tentativas = tentativas + 1, updated_at = datetime('now')
-           WHERE loterica_slug = ? AND data = ? AND horario = ?`,
-                [err.message, slug, data, h]
-            );
-        }
-        saveDatabase();
+        log.error('SCRAPER', 'Erro massivo no Poller de Scraping', err);
     }
 }
 
 /**
- * Retry failed/retrying scraping tasks.
+ * Nasce o dia: Lê todos os horários aprendidos pelas loterias ativas e os inscreve na tabela de status
+ * com status 'pending' para que a UI de Admin mostre quantos sorteios aquele dia "espera" ter.
  */
-async function retryFailed(): Promise<void> {
+export function dailyForecastManager(): void {
+    const today = todayStr();
+    const now = new Date();
+    const currentDayOfWeek = now.getDay();
     const db = getDb();
-    const rows = db.exec(
-        `SELECT loterica_slug, data, horario FROM scraping_status
-     WHERE status IN ('retrying', 'error') AND data = ?`,
-        [todayStr()]
-    );
 
-    if (!rows.length || !rows[0].values.length) return;
+    log.separator('CRON', 'FORECAST DIÁRIO');
+    log.info('CRON', `Alimentando expectativas de sorteios de hoje (${today})...`);
 
-    log.info('CRON', `Retentando ${rows[0].values.length} scraping(s) falhados...`);
+    const loterias = getAllLotericas();
+    let esperados = 0;
 
-    const groupedByLottery: Record<string, string[]> = {};
-    for (const row of rows[0].values) {
-        const [slug, data, horario] = row as [string, string, string];
-        if (!groupedByLottery[slug]) groupedByLottery[slug] = [];
-        groupedByLottery[slug].push(horario);
+    for (const lot of loterias) {
+        for (const h of lot.horarios) {
+            if (h.dias.includes(currentDayOfWeek)) {
+                try {
+                    db.run(
+                        `INSERT OR IGNORE INTO scraping_status (id, loterica_slug, data, horario, status)
+                         VALUES (?, ?, ?, ?, 'pending')`,
+                        [crypto.randomUUID(), lot.slug, today, h.horario]
+                    );
+                    esperados++;
+                } catch (e) { }
+            }
+        }
     }
 
-    for (const [slug, horarios] of Object.entries(groupedByLottery)) {
-        const lot = LOTERICAS.find(l => l.slug === slug);
-        if (lot) {
-            await scrapeForLotteryGroup(slug, lot.estado, todayStr(), horarios);
+    if (esperados > 0) saveDatabase();
+    log.success('CRON', `Forecast completo. Aguardando ${esperados} sorteios ao longo do dia.`);
+}
+
+/**
+ * Morre o dia: Varre tudo que a UI estava esperando que fosse 'success' mas não foi, alertando
+ * ou punindo faltas de horários.
+ */
+export function forgetStaleSchedules(): void {
+    const today = todayStr();
+    const db = getDb();
+
+    log.separator('CRON', 'CLEANUP NOTURNO');
+    log.info('CRON', `Analisando falhas definitivas de sorteios previstos para hoje (${today})...`);
+
+    const rows = db.exec(
+        `SELECT loterica_slug, horario FROM scraping_status 
+         WHERE data = ? AND status IN ('pending', 'error', 'retrying')`,
+        [today]
+    );
+
+    if (rows.length && rows[0].values.length) {
+        let punicoes = 0;
+        for (const row of rows[0].values) {
+            const [slug, horario] = row as [string, string];
+            // O serviço de loterias cuida de gerenciar as faltas limitando a 7.
+            // Se excedeu 7, o próprio serviço apagada.
+            penalizeSchedule(slug, horario);
+
+            db.run(`UPDATE scraping_status SET status = 'error', ultimo_erro = 'Nunca foi retornado pela API hoje'
+                   WHERE loterica_slug = ? AND data = ? AND horario = ?`, [slug, today, horario]);
+            punicoes++;
         }
+
+        saveDatabase();
+        log.info('CRON', `Aplicadas ${punicoes} penalidades a sorteios ausentes.`);
+    } else {
+        log.success('CRON', `Todos os sorteios previstos para hoje ocorreram com sucesso. Zero penalidades.`);
     }
 }
 

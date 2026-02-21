@@ -2,7 +2,6 @@
  * StartupRecoveryService — Runs ONCE at server boot.
  * Checks for missing data from today and creates a recovery queue.
  */
-import { LOTERICAS } from '../config/lotericas.js';
 import { getDb, saveDatabase } from '../database/schema.js';
 import { todayStr } from '../utils/helpers.js';
 import { fetchAllResultados, fetchPalpites, savePalpites, fetchCotacoes, saveCotacoes, fetchHoroscopo } from './ScraperService.js';
@@ -10,7 +9,9 @@ import { getHoroscopo, saveHoroscopo } from './HoroscopoService.js';
 import { ingestResult, type ResultadoInput } from './AmigosDoBichoService.js';
 import { notifyAll } from './WebhookService.js';
 import { mapLotteryToSlug } from '../utils/helpers.js';
+import { getLotericaBySlug } from './LotericasService.js';
 import { log } from '../utils/Logger.js';
+import crypto from 'crypto';
 
 const RECOVERY_DELAY_MS = 2000; // 2s between recovery attempts
 
@@ -39,31 +40,27 @@ export async function runStartupRecovery(): Promise<void> {
 
     const db = getDb();
 
-    // 1. Check missing draws
+    // 1. Check missing draws based on dynamic database expectations
     const missingDraws: MissingDraw[] = [];
 
-    for (const lot of LOTERICAS) {
-        for (const sched of lot.horarios) {
-            if (!sched.dias.includes(now.getDay())) continue;
+    const statusRows = db.exec(
+        "SELECT loterica_slug, horario FROM scraping_status WHERE data = ? AND status IN ('pending', 'retrying')",
+        [today]
+    );
 
-            const horarioStr = sched.horario;
+    if (statusRows.length > 0 && statusRows[0].values.length > 0) {
+        for (const row of statusRows[0].values) {
+            const [slug, horarioStr] = row as [string, string];
+
             const [h, m] = horarioStr.split(':').map(Number);
             const scheduledMinutes = h * 60 + m;
 
             // Only check draws that should have already happened (with 2min grace)
             if (currentMinutes < scheduledMinutes + 2) continue;
 
-            // Check if we have a success entry
-            const statusRows = db.exec(
-                "SELECT status FROM scraping_status WHERE loterica_slug = ? AND data = ? AND horario = ?",
-                [lot.slug, today, horarioStr]
-            );
-
-            const hasSuccess = statusRows.length > 0 && statusRows[0].values.length > 0
-                && statusRows[0].values[0][0] === 'success';
-
-            if (!hasSuccess) {
-                missingDraws.push({ slug: lot.slug, estado: lot.estado, horario: horarioStr });
+            const lotInfo = getLotericaBySlug(slug);
+            if (lotInfo) {
+                missingDraws.push({ slug, estado: lotInfo.estado, horario: horarioStr });
             }
         }
     }
@@ -87,7 +84,7 @@ export async function runStartupRecovery(): Promise<void> {
     }
 
     // Summary
-    const totalMissing = missingDraws.length + (palpitesMissing ? 1 : 0) + (cotacoesMissing ? 1 : 0);
+    const totalMissing = missingDraws.length + (palpitesMissing ? 1 : 0) + (cotacoesMissing ? 1 : 0) + (horoscopoMissing ? 1 : 0);
 
     if (totalMissing === 0) {
         log.success('RECOVERY', 'Nenhum dado faltante! Tudo em dia ✨');
@@ -207,14 +204,17 @@ export async function runStartupRecovery(): Promise<void> {
                                 milhar: String(p.milhar || p.number || p.numero || '').padStart(4, '0'),
                             }));
 
-                            if (premios.length === 0) continue;
+                            let nomeOriginal = r.lottery || r.name || '';
+                            nomeOriginal = nomeOriginal.replace(/\b(nova|novo|loteria|da|de|do|dos|das|extração|extracao)\b/gi, '').replace(/\s+/g, ' ').trim();
 
                             const input: ResultadoInput = {
                                 loterica: draw.slug,
                                 estado: draw.estado,
                                 data: today,
                                 horario: draw.horario,
+                                nome_original: nomeOriginal,
                                 premios,
+                                disableWebhooks: true, // Silenciar webhooks no Recovery
                             };
 
                             const result = ingestResult(input);
@@ -229,10 +229,6 @@ export async function runStartupRecovery(): Promise<void> {
                                 );
                                 saveDatabase();
 
-                                await notifyAll('resultado.novo', {
-                                    loterica: draw.slug, data: today, horario: draw.horario, resultado_id: result.id,
-                                }).catch(() => { });
-
                                 log.success('RECOVERY', `Recuperado: ${draw.slug} ${draw.horario}`);
                                 recovered++;
                                 break;
@@ -240,13 +236,6 @@ export async function runStartupRecovery(): Promise<void> {
                         }
 
                         if (!found) {
-                            // Mark as pending for retry by cron later
-                            db.run(
-                                `INSERT OR IGNORE INTO scraping_status (id, loterica_slug, data, horario, status)
-                   VALUES (?, ?, ?, ?, 'retrying')`,
-                                [crypto.randomUUID(), draw.slug, today, draw.horario]
-                            );
-                            saveDatabase();
                             notFound.push(draw.horario);
                             failed++;
                         }

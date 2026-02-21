@@ -6,7 +6,7 @@
 type LogCategory =
     | 'BOOT' | 'CRON' | 'SCRAPER' | 'RECOVERY'
     | 'WEBHOOK' | 'PROXY' | 'DB' | 'RENDER'
-    | 'MCP' | 'API' | 'TEMPLATE' | 'SHUTDOWN' | 'AUDIT';
+    | 'MCP' | 'API' | 'TEMPLATE' | 'SHUTDOWN' | 'AUDIT' | 'AUTO-LEARN';
 
 const COLORS: Record<LogCategory, string> = {
     BOOT: '\x1b[32m',  // Green
@@ -22,6 +22,7 @@ const COLORS: Record<LogCategory, string> = {
     TEMPLATE: '\x1b[33m',  // Yellow
     SHUTDOWN: '\x1b[31m',  // Red
     AUDIT: '\x1b[35m',     // Magenta
+    'AUTO-LEARN': '\x1b[32m', // Green
 };
 
 const RESET = '\x1b[0m';

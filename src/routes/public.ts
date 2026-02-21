@@ -1,6 +1,6 @@
 import { type FastifyInstance } from 'fastify';
 import { BICHOS } from '../config/bichos.js';
-import { LOTERICAS } from '../config/lotericas.js';
+import { getAllLotericas } from '../services/LotericasService.js';
 import { getDb } from '../database/schema.js';
 import { getResultados, getResultadoById } from '../services/AmigosDoBichoService.js';
 import { getPalpitesDia, getPremiadosDia, getPremiadoById } from '../services/ScraperService.js';
@@ -79,7 +79,7 @@ export async function registerPublicRoutes(app: FastifyInstance): Promise<void> 
             response: { 200: { type: 'array', items: { type: 'object', properties: { slug: { type: 'string' }, nome: { type: 'string' }, estado: { type: 'string' }, horarios: { type: 'array', items: { type: 'object', properties: { horario: { type: 'string' }, dias: { type: 'array', items: { type: 'number' } } } } } } }, examples: [[{ slug: 'pt-rio', nome: 'PT', estado: 'RJ', horarios: [{ horario: '14:20', dias: [0, 1, 2, 3, 4, 5, 6] }] }]] } },
         },
     }, async () => {
-        return LOTERICAS;
+        return getAllLotericas();
     });
 
     // ==================== BICHOS ====================

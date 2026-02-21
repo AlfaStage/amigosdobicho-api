@@ -186,3 +186,57 @@ export function deleteProxy(id: string): boolean {
     saveDatabase();
     return true;
 }
+
+/**
+ * Processes a bulk text of proxies, tests them, and adds valid ones.
+ */
+export async function processBulkProxies(text: string): Promise<{ totalFound: number; added: number }> {
+    const db = getDb();
+    // Regex matches optional protocol, then IP, then PORT. 
+    // Examples: 192.168.0.1:8080 or http://10.0.0.1:3128
+    const proxyRegex = /(?:(https?|socks[45]):\/\/)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)/g;
+    const foundProxies: { host: string; port: string; protocol: string }[] = [];
+    let match;
+
+    while ((match = proxyRegex.exec(text)) !== null) {
+        const protocol = match[1] || 'http'; // Default to http if not specified
+        const host = match[2];
+        const port = match[3];
+        // Ensure no duplicates in the same batch
+        if (!foundProxies.some(p => p.host === host && p.port === port)) {
+            foundProxies.push({ host, port, protocol });
+        }
+    }
+
+    if (foundProxies.length === 0) return { totalFound: 0, added: 0 };
+
+    log.info('PROXY', `Testando ${foundProxies.length} proxies extraídos em lote...`);
+    let added = 0;
+
+    // Teste em lote (batches de 20 para não sobrecarregar)
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < foundProxies.length; i += BATCH_SIZE) {
+        const batch = foundProxies.slice(i, i + BATCH_SIZE);
+        const testPromises = batch.map(async (p) => {
+            const result = await testProxy(p.host, p.port, p.protocol);
+            if (result.alive) {
+                try {
+                    db.run(
+                        `INSERT INTO proxies (id, host, port, protocol, source, alive, score, latency_ms, last_checked)
+                         VALUES (?, ?, ?, ?, 'manual', 1, 100, ?, datetime('now'))
+                         ON CONFLICT(host, port) DO UPDATE SET 
+                            alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), source = 'manual'`,
+                        [crypto.randomUUID(), p.host, p.port, p.protocol, result.latency, result.latency]
+                    );
+                    added++;
+                } catch { /* ignorar erro de parse sql */ }
+            }
+        });
+        await Promise.all(testPromises); // Espera o batch atual terminar
+    }
+
+    saveDatabase();
+    log.success('PROXY', 'Bulk import concluído', { totalFound: foundProxies.length, added });
+    return { totalFound: foundProxies.length, added };
+}
+

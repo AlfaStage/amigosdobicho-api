@@ -4,7 +4,6 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { LOTERICAS } from '../config/lotericas.js';
 import { log } from '../utils/Logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,7 +26,6 @@ export async function initDatabase(): Promise<Database> {
   db.run('PRAGMA journal_mode = WAL;');
 
   createTables();
-  seedLotericas();
 
   saveDatabase();
 
@@ -253,20 +251,4 @@ function createTables(): void {
       UNIQUE(data, signo)
     )
   `);
-}
-
-function seedLotericas(): void {
-  const existing = db.exec('SELECT COUNT(*) as count FROM lotericas');
-  const count = existing[0]?.values[0]?.[0] as number;
-  if (count > 0) return;
-
-  const stmt = db.prepare('INSERT INTO lotericas (id, slug, nome, estado, horarios) VALUES (?, ?, ?, ?, ?)');
-
-  for (const lot of LOTERICAS) {
-    const id = crypto.randomUUID();
-    stmt.run([id, lot.slug, lot.nome, lot.estado, JSON.stringify(lot.horarios)]);
-  }
-
-  stmt.free();
-  log.info('DB', `Seed: ${LOTERICAS.length} lotéricas inseridas`);
 }

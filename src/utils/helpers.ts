@@ -1,19 +1,20 @@
-import { LOTERICAS } from '../config/lotericas.js';
+import { getAllLotericas } from '../services/LotericasService.js';
 
 /**
  * Maps chaotic lottery names from external APIs to our canonical slugs.
  * Uses aggressive pattern matching as described in the grimório.
  */
-export function mapLotteryToSlug(nome: string, estado?: string): string | null {
+export function mapLotteryToSlug(nome: string, estado?: string): string {
     const n = nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
     const e = (estado || '').toUpperCase();
 
-    // Direct slug match
-    for (const lot of LOTERICAS) {
-        if (n === lot.slug || n === lot.nome.toLowerCase()) return lot.slug;
+    // 1. Direct slug match with DB
+    const lotericas = getAllLotericas();
+    for (const lot of lotericas) {
+        if (n === lot.slug || n === lot.nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()) return lot.slug;
     }
 
-    // Heuristic matching
+    // 2. Historical Heuristics
     if (n.includes('ptm') && (e === 'RJ' || n.includes('rio'))) return 'ptm-rio';
     if (n.includes('ptn') && (e === 'RJ' || n.includes('rio'))) return 'ptn-rio';
     if (n.includes('pt') && (e === 'RJ' || n.includes('rio'))) return 'pt-rio';
@@ -35,7 +36,24 @@ export function mapLotteryToSlug(nome: string, estado?: string): string | null {
     if (e === 'SP') return 'bandeirantes-sp';
     if (e === 'GO') return 'look-goias';
 
-    return null;
+    // 3. Fallback to Dynamic Slug Generator (Auto-Learning Mode)
+    return generateDynamicSlug(nome, estado || 'br');
+}
+
+/**
+ * Creates an intelligent slug for a new unknown lottery.
+ * Ex: "Nova Loteria da Sorte" (CE) -> "da-sorte-ce"
+ */
+export function generateDynamicSlug(nome: string, estado: string): string {
+    let limpo = nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s]/g, '').trim();
+
+    // Remove stop-words/palavras genéricas que não ajudam na identificação
+    limpo = limpo.replace(/\b(nova|novo|loteria|da|de|do|dos|das)\b/gi, '').replace(/\s+/g, ' ').trim().replace(/\s+/g, '-');
+
+    const uf = estado.toLowerCase().trim();
+    if (limpo.endsWith(`-${uf}`)) return limpo;
+    return `${limpo}-${uf}`;
 }
 
 /**

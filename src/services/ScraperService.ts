@@ -2,7 +2,7 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import puppeteer from 'puppeteer';
 import { getDb, saveDatabase } from '../database/schema.js';
-import { ESTADOS_API } from '../config/lotericas.js';
+const ESTADOS_API: string[] = ['DF', 'BA', 'GO', 'MG', 'PB', 'RJ', 'SP', 'NA'];
 import { getBestProxy } from './ProxyService.js';
 import { todayStr } from '../utils/helpers.js';
 import { log } from '../utils/Logger.js';

@@ -4,7 +4,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getDb, saveDatabase } from '../database/schema.js';
 import { getWebhooks, createWebhook, deleteWebhook, testWebhook, toggleWebhookLoterica, reactivateWebhook, getWebhookLogs } from '../services/WebhookService.js';
-import { getAllProxies, addManualProxy, deleteProxy, runProxySweep } from '../services/ProxyService.js';
+import { getAllProxies, addManualProxy, deleteProxy, runProxySweep, processBulkProxies } from '../services/ProxyService.js';
 import { todayStr } from '../utils/helpers.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -147,6 +147,17 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         if (!host || !port || !protocol) return { error: 'host, port, protocol required' };
         const ok = addManualProxy(host, port, protocol);
         return { added: ok };
+    });
+
+    app.post('/api/proxies/bulk', {
+        preHandler: authHook,
+        schema: { tags: ['Proxies'], summary: 'Adicionar proxies em massa via texto livre' }
+    }, async (req) => {
+        const { text } = req.body as any;
+        if (!text || typeof text !== 'string') return { error: 'text is required' };
+
+        const result = await processBulkProxies(text);
+        return result;
     });
 
     app.delete('/api/proxies/:id', {
