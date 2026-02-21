@@ -31,11 +31,13 @@ export function getAllLotericas(): LotericaBD[] {
         try {
             const raw = JSON.parse(r[4] as string);
             // Garante que a estrutura antiga ganhe o campo de falhas_consecutivas = 0
-            parsedHorarios = raw.map((h: any) => ({
-                horario: h.horario,
-                dias: h.dias || [0, 1, 2, 3, 4, 5, 6],
-                falhas_consecutivas: h.falhas_consecutivas || 0
-            }));
+            parsedHorarios = raw
+                .filter((h: any) => h && typeof h.horario === 'string')
+                .map((h: any) => ({
+                    horario: h.horario,
+                    dias: h.dias || [0, 1, 2, 3, 4, 5, 6],
+                    falhas_consecutivas: h.falhas_consecutivas || 0
+                }));
         } catch (e) {
             log.warn('DB', `Erro ao fazer parse dos horários da lotérica ${r[1]}`);
         }
@@ -93,6 +95,7 @@ export function learnOrGetLoterica(nomeOriginal: string, estado: string, slugEsp
  * Também reseta as falhas_consecutivas caso a API retorne resultados verdadeiros.
  */
 export function learnOrConfirmSchedule(slug: string, horario: string, diaDaSemana: number): void {
+    if (!horario || typeof horario !== 'string') return;
     const loterica = getLotericaBySlug(slug);
     if (!loterica) return;
 
@@ -103,6 +106,7 @@ export function learnOrConfirmSchedule(slug: string, horario: string, diaDaSeman
     const normalizedTime = horario.split(':').length === 2 ? `${horario}:00` : horario;
 
     const novosHorarios = loterica.horarios.map(h => {
+        if (!h.horario) return h;
         // Se encontramos o slot de tempo que estamos ensinando
         if (h.horario.substring(0, 5) === normalizedTime.substring(0, 5)) {
             foundTime = true;
@@ -144,6 +148,7 @@ export function learnOrConfirmSchedule(slug: string, horario: string, diaDaSeman
  * Limpeza: Penaliza um horário. Se bater o limite (ex: 7), remove do array e desaprende. 
  */
 export function penalizeSchedule(slug: string, horario: string): void {
+    if (!horario || typeof horario !== 'string') return;
     const loterica = getLotericaBySlug(slug);
     if (!loterica) return;
 
@@ -152,6 +157,7 @@ export function penalizeSchedule(slug: string, horario: string): void {
     let removed = false;
 
     const novosHorarios = loterica.horarios.map(h => {
+        if (!h.horario) return h;
         if (h.horario.substring(0, 5) === normalizedTime) {
             h.falhas_consecutivas += 1;
             log.warn('AUTO-LEARN', `📉 Lotérica ${slug} (${horario}) sofreu penalidade: ${h.falhas_consecutivas}/${limiteFalhas} falhas consecutivas ignoradas pela API.`);

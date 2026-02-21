@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amigos do Bicho - Admin</title>
+    <link rel="stylesheet" href="/admin/styles.css">
+</head>
+
+<body>
+    <nav class="nav">
+        <span class="nav-brand">🎲 Amigos do Bicho</span>
+        <span class="nav-link active" data-page="status">📊 Status</span>
+        <span class="nav-link" data-page="proxies">🌐 Proxies</span>
+        <span class="nav-link" data-page="templates">🎨 Templates</span>
+        <span class="nav-link" data-page="webhooks">🔔 Webhooks</span>
+        <a class="nav-link" href="/docs" target="_blank">📄 Docs</a>
+    </nav>
+
+    <div class="container">
+        <!-- STATUS PAGE -->
+        <div id="page-status" class="page active">
+            <h2 class="page-title">Dashboard de Status</h2>
+            <div class="cards" id="status-cards"></div>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Lotérica</th>
+                            <th>Horário</th>
+                            <th>Status</th>
+                            <th>Tentativas</th>
+                            <th>Erro</th>
+                        </tr>
+                    </thead>
+                    <tbody id="status-table"></tbody>
+                </table>
+                <div id="status-empty" class="empty-state">Nenhum scraping executado hoje. Os jobs Cron estão
+                    monitorando os horários dos sorteios.</div>
+            </div>
+        </div>
+
+        <!-- PROXIES PAGE -->
+        <div id="page-proxies" class="page">
+            <div class="page-header">
+                <h2 class="page-title">Proxy Flow</h2>
+                <div class="btn-group">
+                    <button class="btn btn-outline" onclick="sweepProxies()">🔄 Sweep Agora</button>
+                    <button class="btn btn-primary" onclick="showAddProxy()">+ Adicionar Proxy</button>
+                </div>
+            </div>
+            <div id="add-proxy-form" class="card form-panel hidden">
+                <div class="form-row" style="flex-direction: column; align-items: stretch;">
+                    <label style="margin-bottom: 5px; font-weight: bold; font-size: 14px; color: var(--text-muted)">Cole sua lista de proxies (IP:PORT ou URL):</label>
+                    <textarea id="proxy-bulk-text" rows="5" placeholder="Ex:
+200.12.33.1:8080
+http://192.168.0.1:3128" style="width: 100%; border-radius: 4px; border: 1px solid var(--border); padding: 8px; background: var(--bg-hover); color: var(--text); resize: vertical; margin-bottom: 10px; font-family: monospace;"></textarea>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-primary" onclick="addBulkProxies()" id="btn-add-bulk">⚡ Extrair e Testar Em Lote</button>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Host</th>
+                            <th>Port</th>
+                            <th>Protocol</th>
+                            <th>Source</th>
+                            <th>Score</th>
+                            <th>Latência</th>
+                            <th>Status</th>
+                            <th>Ação</th>
+                        </tr>
+                    </thead>
+                    <tbody id="proxies-table"></tbody>
+                </table>
+                <div id="proxies-empty" class="empty-state hidden">Nenhum proxy cadastrado.</div>
+            </div>
+        </div>
+
+        <!-- TEMPLATES PAGE -->
+        <div id="page-templates" class="page">
+            <h2 class="page-title">Template Designer</h2>
+            <div class="tabs" id="template-tabs">
+                <span class="tab active" data-type="resultado">Resultado</span>
+                <span class="tab" data-type="palpite">Palpite</span>
+                <span class="tab" data-type="premiado_unitario">Premiado Unit.</span>
+                <span class="tab" data-type="premiado_dia">Premiados Dia</span>
+                <span class="tab" data-type="cotacao">Cotação</span>
+            </div>
+
+            <!-- Editor -->
+            <div class="card editor-container">
+                <div class="editor-header">
+                    <div class="editor-label">📝 HTML do Template: <strong id="template-type-label">resultado</strong>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="runPreviews()">👁 Preview</button>
+                        <button class="btn btn-outline" onclick="saveTemplate()">💾 Salvar</button>
+                        <button class="btn btn-outline" onclick="resetTemplate()">🔄 Reset</button>
+                    </div>
+                </div>
+                <textarea id="template-html" rows="18" class="code-editor" spellcheck="false"></textarea>
+            </div>
+
+            <!-- Dual Preview -->
+            <div class="preview-grid">
+                <div class="card preview-panel">
+                    <div class="preview-header">
+                        <span class="preview-label">🖥️ Preview HTML (iframe)</span>
+                    </div>
+                    <div class="preview-frame-wrapper">
+                        <iframe id="preview-iframe" class="preview-iframe" sandbox="allow-same-origin"></iframe>
+                    </div>
+                </div>
+                <div class="card preview-panel">
+                    <div class="preview-header">
+                        <span class="preview-label">📸 Preview Imagem (PNG)</span>
+                        <span id="image-loading" class="loading hidden"></span>
+                    </div>
+                    <div class="preview-image-wrapper" id="preview-image-container">
+                        <span class="empty-preview">Clique em Preview para gerar</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- WEBHOOKS PAGE -->
+        <div id="page-webhooks" class="page">
+            <div class="page-header">
+                <h2 class="page-title">Webhook Center</h2>
+                <button class="btn btn-primary" onclick="showAddWebhook()">+ Novo Webhook</button>
+            </div>
+            <div id="add-webhook-form" class="card form-panel hidden">
+                <div class="form-row">
+                    <input id="webhook-url" placeholder="URL do Webhook (https://...)" class="input-full">
+                    <button class="btn btn-primary" onclick="addWebhook()">Criar</button>
+                </div>
+            </div>
+            <div id="webhooks-list"></div>
+            <div id="webhooks-empty" class="empty-state">Nenhum webhook cadastrado. Clique em "+ Novo Webhook" para
+                criar.</div>
+            <div id="webhook-logs" class="card hidden">
+                <h3 class="section-title">Logs de Entrega</h3>
+                <div class="log-box" id="webhook-log-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_KEY = 'amigos-do-bicho-secret-key';
+        const headers = { 'x-api-key': API_KEY, 'Content-Type': 'application/json' };
+
+        // ========== NAV ==========
+        document.querySelectorAll('.nav-link[data-page]').forEach(el => {
+            el.addEventListener('click', () => {
+                document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+                el.classList.add('active');
+                document.getElementById('page-' + el.dataset.page).classList.add('active');
+                if (el.dataset.page === 'status') loadStatus();
+                if (el.dataset.page === 'proxies') loadProxies();
+                if (el.dataset.page === 'webhooks') loadWebhooks();
+                if (el.dataset.page === 'templates') loadTemplate(currentTemplateType);
+            });
+        });
+
+        // ========== STATUS ==========
+        async function loadStatus() {
+            try {
+                const r = await fetch('/api/status/hoje', { headers });
+                const d = await r.json();
+                document.getElementById('status-cards').innerHTML = `
+      <div class="card stat-card"><div class="card-label">Total Dia</div><div class="card-value">${d.total_dia || 0}</div></div>
+      <div class="card stat-card"><div class="card-label">Sucesso</div><div class="card-value green">${d.sucesso || 0}</div></div>
+      <div class="card stat-card"><div class="card-label">Erro</div><div class="card-value red">${d.erro || 0}</div></div>
+      <div class="card stat-card"><div class="card-label">Taxa</div><div class="card-value yellow">${d.taxa_sucesso || 0}%</div></div>`;
+                const p = await fetch('/api/status/painel', { headers });
+                const rows = await p.json();
+                const arr = Array.isArray(rows) ? rows : [];
+                document.getElementById('status-empty').classList.toggle('hidden', arr.length > 0);
+                document.getElementById('status-table').innerHTML = arr.map(r => `
+      <tr><td>${r.loterica_slug}</td><td>${r.horario}</td>
+      <td><span class="badge ${r.status === 'success' ? 'badge-green' : r.status === 'error' ? 'badge-red' : 'badge-yellow'}">${r.status}</span></td>
+      <td>${r.tentativas}</td><td>${r.ultimo_erro || '-'}</td></tr>`).join('');
+            } catch (e) { console.error(e); }
+        }
+
+        // ========== PROXIES ==========
+        async function loadProxies() {
+            const r = await fetch('/api/proxies', { headers });
+            const data = await r.json();
+            const arr = Array.isArray(data) ? data : [];
+            document.getElementById('proxies-empty').classList.toggle('hidden', arr.length > 0);
+            document.getElementById('proxies-table').innerHTML = arr.map(p => {
+                const scoreColor = p.score > 80 ? 'var(--green)' : p.score > 40 ? 'var(--yellow)' : 'var(--red)';
+                return `<tr><td>${p.host}</td><td>${p.port}</td><td>${p.protocol}</td>
+      <td><span class="badge badge-${p.source === 'manual' ? 'green' : 'yellow'}">${p.source}</span></td>
+      <td><div class="score-row"><div class="score-bar"><div class="score-fill" style="width:${p.score}%;background:${scoreColor}"></div></div><span class="score-num">${p.score}</span></div></td>
+      <td>${p.latency_ms ? p.latency_ms + 'ms' : '-'}</td>
+      <td><span class="badge ${p.alive ? 'badge-green' : 'badge-red'}">${p.alive ? 'Alive' : 'Dead'}</span></td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteProxy('${p.id}')">Deletar</button></td></tr>`;
+            }).join('');
+        }
+        function showAddProxy() { document.getElementById('add-proxy-form').classList.toggle('hidden'); }
+        async function addBulkProxies() {
+            const btn = document.getElementById('btn-add-bulk');
+            const text = document.getElementById('proxy-bulk-text').value;
+            if(!text.trim()) return toast('Cole algum texto estruturado primeiro!', 'error');
+            
+            btn.textContent = 'Processando testes...';
+            btn.disabled = true;
+            try {
+                const r = await fetch('/api/proxies/bulk', { method: 'POST', headers, body: JSON.stringify({ text }) });
+                const d = await r.json();
+                if(d.error) throw new Error(d.error);
+                
+                document.getElementById('add-proxy-form').classList.add('hidden');
+                document.getElementById('proxy-bulk-text').value = '';
+                loadProxies(); 
+                toast(`Extraídos: ${d.totalFound} | Aprovados: ${d.added}`);
+            } catch(e) {
+                toast('Erro: ' + e.message, 'error');
+            } finally {
+                btn.textContent = '⚡ Extrair e Testar Em Lote';
+                btn.disabled = false;
+            }
+        }
+        async function deleteProxy(id) { await fetch('/api/proxies/' + id, { method: 'DELETE', headers }); loadProxies(); }
+        async function sweepProxies() { toast('Sweep iniciado...'); await fetch('/api/proxies/sweep', { method: 'POST', headers }); loadProxies(); toast('Sweep concluído!'); }
+
+        // ========== TEMPLATES ==========
+        let currentTemplateType = 'resultado';
+
+        document.querySelectorAll('#template-tabs .tab').forEach(el => {
+            el.addEventListener('click', () => {
+                document.querySelectorAll('#template-tabs .tab').forEach(t => t.classList.remove('active'));
+                el.classList.add('active');
+                currentTemplateType = el.dataset.type;
+                loadTemplate(currentTemplateType);
+            });
+        });
+
+        async function loadTemplate(type) {
+            document.getElementById('template-type-label').textContent = type;
+            try {
+                const r = await fetch('/admin/api/template?type=' + type, { headers });
+                const d = await r.json();
+                document.getElementById('template-html').value = d.html_content || '';
+                // Auto-preview on load
+                runPreviews();
+            } catch (e) {
+                document.getElementById('template-html').value = '';
+                console.error('loadTemplate error:', e);
+            }
+        }
+
+        async function resetTemplate() {
+            try {
+                const r = await fetch('/admin/api/template-base/' + currentTemplateType);
+                const d = await r.json();
+                if (d.html_content) {
+                    document.getElementById('template-html').value = d.html_content;
+                    runPreviews();
+                    toast('Template resetado para o original!');
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        function runPreviews() {
+            const html = document.getElementById('template-html').value;
+            if (!html) return;
+            previewIframe(html);
+            previewImage(html);
+        }
+
+        function previewIframe(html) {
+            const iframe = document.getElementById('preview-iframe');
+            const fullHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{width:700px;font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif;transform-origin:top left;transform:scale(0.48);}</style></head><body>' + html + '</body></html>';
+            const blob = new Blob([fullHtml], { type: 'text/html' });
+            iframe.src = URL.createObjectURL(blob);
+        }
+
+        async function previewImage(html) {
+            const container = document.getElementById('preview-image-container');
+            const loading = document.getElementById('image-loading');
+            loading.classList.remove('hidden');
+            container.innerHTML = '<span class="empty-preview">Gerando imagem...</span>';
+            try {
+                const r = await fetch('/admin/api/preview-image', { method: 'POST', headers, body: JSON.stringify({ html }) });
+                const d = await r.json();
+                if (d.image) {
+                    container.innerHTML = '<img src="' + d.image + '" alt="Preview PNG" class="preview-img">';
+                } else {
+                    container.innerHTML = '<span class="empty-preview">Erro ao gerar imagem</span>';
+                }
+            } catch (e) {
+                container.innerHTML = '<span class="empty-preview">Erro: ' + e.message + '</span>';
+            }
+            loading.classList.add('hidden');
+        }
+
+        async function saveTemplate() {
+            const html = document.getElementById('template-html').value;
+            await fetch('/admin/api/template', { method: 'POST', headers, body: JSON.stringify({ type: currentTemplateType, name: currentTemplateType, html_content: html }) });
+            toast('Template salvo!');
+        }
+
+        // ========== WEBHOOKS ==========
+        async function loadWebhooks() {
+            const r = await fetch('/v1/webhooks', { headers });
+            const data = await r.json();
+            const arr = Array.isArray(data) ? data : [];
+            document.getElementById('webhooks-empty').classList.toggle('hidden', arr.length > 0);
+            document.getElementById('webhooks-list').innerHTML = arr.map(w => `
+    <div class="card webhook-card">
+      <div class="webhook-row">
+        <div><div class="webhook-url">${w.url}</div>
+          <div class="webhook-meta">Falhas: ${w.consecutive_failures} | <span class="badge ${w.active ? 'badge-green' : 'badge-red'}">${w.active ? 'Ativo' : 'Inativo'}</span></div></div>
+        <div class="btn-group">
+          <button class="btn btn-outline btn-sm" onclick="testWebhook('${w.id}')">🔥 Teste</button>
+          <button class="btn btn-outline btn-sm" onclick="showLogs('${w.id}')">📋 Logs</button>
+          ${!w.active ? '<button class="btn btn-primary btn-sm" onclick="reactivateWebhook(\'' + w.id + '\')">Reativar</button>' : ''}
+          <button class="btn btn-danger btn-sm" onclick="deleteWebhook('${w.id}')">Deletar</button>
+        </div>
+      </div>
+    </div>`).join('');
+        }
+        function showAddWebhook() { document.getElementById('add-webhook-form').classList.toggle('hidden'); }
+        async function addWebhook() {
+            await fetch('/v1/webhooks', { method: 'POST', headers, body: JSON.stringify({ url: document.getElementById('webhook-url').value }) });
+            document.getElementById('add-webhook-form').classList.add('hidden');
+            loadWebhooks(); toast('Webhook criado!');
+        }
+        async function deleteWebhook(id) { await fetch('/v1/webhooks/' + id, { method: 'DELETE', headers }); loadWebhooks(); }
+        async function testWebhook(id) {
+            toast('Testando...');
+            const r = await fetch('/v1/webhooks/' + id + '/test', { method: 'POST', headers });
+            const d = await r.json();
+            toast(d.success ? '✅ Webhook OK!' : '❌ Falhou: ' + (d.error || ''), d.success ? 'success' : 'error');
+        }
+        async function reactivateWebhook(id) { await fetch('/v1/webhooks/' + id + '/reactivate', { method: 'POST', headers }); loadWebhooks(); toast('Reativado!'); }
+        async function showLogs(id) {
+            const el = document.getElementById('webhook-logs');
+            el.classList.remove('hidden');
+            const r = await fetch('/v1/webhooks/' + id + '/historico', { headers });
+            const logs = await r.json();
+            document.getElementById('webhook-log-content').textContent = (Array.isArray(logs) ? logs : []).map(l =>
+                `[${l.created_at}] ${l.status.toUpperCase()} ${l.status_code || '-'} | ${l.event}\n${l.error_message || l.response_body || ''}`
+            ).join('\n---\n') || 'Nenhum log encontrado.';
+        }
+
+        // ========== TOAST ==========
+        function toast(msg, type = 'success') {
+            const el = document.createElement('div');
+            el.className = 'toast toast-' + type;
+            el.textContent = msg;
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 3000);
+        }
+
+        // ========== INIT ==========
+        loadStatus();
+        setInterval(loadStatus, 30000);
+    </script>
+</body>
+
+</html>

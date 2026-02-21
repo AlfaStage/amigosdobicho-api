@@ -18,7 +18,8 @@ data/
 # ======================
 # Build artifacts
 # ======================
-dist/
+/dist/
+!admin/dist/
 
 # ======================
 # Agent / AI files
