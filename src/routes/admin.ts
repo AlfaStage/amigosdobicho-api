@@ -71,12 +71,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     });
 
     // ==================== WEBHOOKS ====================
-    app.get('/v1/webhooks', {
+    app.get('/api/webhooks', {
         preHandler: authHook,
         schema: { tags: ['Webhooks'], summary: 'Listar webhooks' }
     }, async () => getWebhooks());
 
-    app.post('/v1/webhooks', {
+    app.post('/api/webhooks', {
         preHandler: authHook,
         schema: { tags: ['Webhooks'], summary: 'Criar novo webhook', body: { type: 'object', properties: { url: { type: 'string' } } } }
     }, async (req) => {
@@ -86,7 +86,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         return { id, url };
     });
 
-    app.delete('/v1/webhooks/:id', {
+    app.delete('/api/webhooks/:id', {
         preHandler: authHook,
         schema: { tags: ['Webhooks'], summary: 'Deletar webhook', params: { type: 'object', properties: { id: { type: 'string' } } } }
     }, async (req) => {
@@ -95,7 +95,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         return { deleted: true };
     });
 
-    app.post('/v1/webhooks/:id/test', {
+    app.post('/api/webhooks/:id/test', {
         preHandler: authHook,
         schema: { tags: ['Webhooks'], summary: 'Testar envio de webhook' }
     }, async (req) => {
@@ -103,7 +103,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         return testWebhook(id);
     });
 
-    app.get('/v1/webhooks/:id/historico', {
+    app.get('/api/webhooks/:id/historico', {
         preHandler: authHook,
         schema: { tags: ['Webhooks'], summary: 'Ver histórico de envios do webhook' }
     }, async (req) => {
@@ -111,7 +111,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         return getWebhookLogs(id);
     });
 
-    app.put('/v1/webhooks/:id/lotericas', {
+    app.put('/api/webhooks/:id/lotericas', {
         preHandler: authHook,
         schema: { tags: ['Webhooks'], summary: 'Habilitar/Desabilitar lotéricas no webhook' }
     }, async (req) => {
@@ -124,7 +124,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         return { updated: true };
     });
 
-    app.post('/v1/webhooks/:id/reactivate', {
+    app.post('/api/webhooks/:id/reactivate', {
         preHandler: authHook,
         schema: { tags: ['Webhooks'], summary: 'Reativar webhook desativado por erros' }
     }, async (req) => {

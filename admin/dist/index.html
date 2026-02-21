@@ -52,12 +52,15 @@
             </div>
             <div id="add-proxy-form" class="card form-panel hidden">
                 <div class="form-row" style="flex-direction: column; align-items: stretch;">
-                    <label style="margin-bottom: 5px; font-weight: bold; font-size: 14px; color: var(--text-muted)">Cole sua lista de proxies (IP:PORT ou URL):</label>
+                    <label style="margin-bottom: 5px; font-weight: bold; font-size: 14px; color: var(--text-muted)">Cole
+                        sua lista de proxies (IP:PORT ou URL):</label>
                     <textarea id="proxy-bulk-text" rows="5" placeholder="Ex:
 200.12.33.1:8080
-http://192.168.0.1:3128" style="width: 100%; border-radius: 4px; border: 1px solid var(--border); padding: 8px; background: var(--bg-hover); color: var(--text); resize: vertical; margin-bottom: 10px; font-family: monospace;"></textarea>
+http://192.168.0.1:3128"
+                        style="width: 100%; border-radius: 4px; border: 1px solid var(--border); padding: 8px; background: var(--bg-hover); color: var(--text); resize: vertical; margin-bottom: 10px; font-family: monospace;"></textarea>
                     <div style="display: flex; gap: 10px;">
-                        <button class="btn btn-primary" onclick="addBulkProxies()" id="btn-add-bulk">⚡ Extrair e Testar Em Lote</button>
+                        <button class="btn btn-primary" onclick="addBulkProxies()" id="btn-add-bulk">⚡ Extrair e Testar
+                            Em Lote</button>
                     </div>
                 </div>
             </div>
@@ -209,20 +212,20 @@ http://192.168.0.1:3128" style="width: 100%; border-radius: 4px; border: 1px sol
         async function addBulkProxies() {
             const btn = document.getElementById('btn-add-bulk');
             const text = document.getElementById('proxy-bulk-text').value;
-            if(!text.trim()) return toast('Cole algum texto estruturado primeiro!', 'error');
-            
+            if (!text.trim()) return toast('Cole algum texto estruturado primeiro!', 'error');
+
             btn.textContent = 'Processando testes...';
             btn.disabled = true;
             try {
                 const r = await fetch('/api/proxies/bulk', { method: 'POST', headers, body: JSON.stringify({ text }) });
                 const d = await r.json();
-                if(d.error) throw new Error(d.error);
-                
+                if (d.error) throw new Error(d.error);
+
                 document.getElementById('add-proxy-form').classList.add('hidden');
                 document.getElementById('proxy-bulk-text').value = '';
-                loadProxies(); 
+                loadProxies();
                 toast(`Extraídos: ${d.totalFound} | Aprovados: ${d.added}`);
-            } catch(e) {
+            } catch (e) {
                 toast('Erro: ' + e.message, 'error');
             } finally {
                 btn.textContent = '⚡ Extrair e Testar Em Lote';
@@ -311,7 +314,7 @@ http://192.168.0.1:3128" style="width: 100%; border-radius: 4px; border: 1px sol
 
         // ========== WEBHOOKS ==========
         async function loadWebhooks() {
-            const r = await fetch('/v1/webhooks', { headers });
+            const r = await fetch('/api/webhooks', { headers });
             const data = await r.json();
             const arr = Array.isArray(data) ? data : [];
             document.getElementById('webhooks-empty').classList.toggle('hidden', arr.length > 0);
@@ -331,22 +334,22 @@ http://192.168.0.1:3128" style="width: 100%; border-radius: 4px; border: 1px sol
         }
         function showAddWebhook() { document.getElementById('add-webhook-form').classList.toggle('hidden'); }
         async function addWebhook() {
-            await fetch('/v1/webhooks', { method: 'POST', headers, body: JSON.stringify({ url: document.getElementById('webhook-url').value }) });
+            await fetch('/api/webhooks', { method: 'POST', headers, body: JSON.stringify({ url: document.getElementById('webhook-url').value }) });
             document.getElementById('add-webhook-form').classList.add('hidden');
             loadWebhooks(); toast('Webhook criado!');
         }
-        async function deleteWebhook(id) { await fetch('/v1/webhooks/' + id, { method: 'DELETE', headers }); loadWebhooks(); }
+        async function deleteWebhook(id) { await fetch('/api/webhooks/' + id, { method: 'DELETE', headers }); loadWebhooks(); }
         async function testWebhook(id) {
             toast('Testando...');
-            const r = await fetch('/v1/webhooks/' + id + '/test', { method: 'POST', headers });
+            const r = await fetch('/api/webhooks/' + id + '/test', { method: 'POST', headers });
             const d = await r.json();
             toast(d.success ? '✅ Webhook OK!' : '❌ Falhou: ' + (d.error || ''), d.success ? 'success' : 'error');
         }
-        async function reactivateWebhook(id) { await fetch('/v1/webhooks/' + id + '/reactivate', { method: 'POST', headers }); loadWebhooks(); toast('Reativado!'); }
+        async function reactivateWebhook(id) { await fetch('/api/webhooks/' + id + '/reactivate', { method: 'POST', headers }); loadWebhooks(); toast('Reativado!'); }
         async function showLogs(id) {
             const el = document.getElementById('webhook-logs');
             el.classList.remove('hidden');
-            const r = await fetch('/v1/webhooks/' + id + '/historico', { headers });
+            const r = await fetch('/api/webhooks/' + id + '/historico', { headers });
             const logs = await r.json();
             document.getElementById('webhook-log-content').textContent = (Array.isArray(logs) ? logs : []).map(l =>
                 `[${l.created_at}] ${l.status.toUpperCase()} ${l.status_code || '-'} | ${l.event}\n${l.error_message || l.response_body || ''}`
