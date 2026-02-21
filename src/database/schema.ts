@@ -26,6 +26,7 @@ export async function initDatabase(): Promise<Database> {
   db.run('PRAGMA journal_mode = WAL;');
 
   createTables();
+  runMigrations();
 
   saveDatabase();
 
@@ -177,6 +178,8 @@ function createTables(): void {
       host TEXT NOT NULL,
       port TEXT NOT NULL,
       protocol TEXT NOT NULL CHECK(protocol IN ('http', 'https', 'socks4', 'socks5')),
+      username TEXT,
+      password TEXT,
       source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual', 'proxyscrape', 'geonode', '911proxy')),
       alive INTEGER DEFAULT 1,
       latency_ms INTEGER,
@@ -252,3 +255,9 @@ function createTables(): void {
     )
   `);
 }
+
+function runMigrations(): void {
+  try { db.run("ALTER TABLE proxies ADD COLUMN username TEXT;"); } catch (e) { /* already exists */ }
+  try { db.run("ALTER TABLE proxies ADD COLUMN password TEXT;"); } catch (e) { /* already exists */ }
+}
+

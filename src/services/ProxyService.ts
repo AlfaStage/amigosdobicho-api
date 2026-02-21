@@ -6,6 +6,8 @@ interface ProxyEntry {
     host: string;
     port: string;
     protocol: string;
+    username?: string;
+    password?: string;
     source: string;
 }
 
@@ -62,17 +64,24 @@ async function fetchFromApis(): Promise<ProxyEntry[]> {
 /**
  * Tests a single proxy by making an HTTP request through it.
  */
-async function testProxy(host: string, port: string, protocol: string): Promise<{ alive: boolean; latency: number }> {
+async function testProxy(host: string, port: string, protocol: string, username?: string, password?: string): Promise<{ alive: boolean; latency: number }> {
     const start = Date.now();
     try {
         const proxyUrl = `${protocol}://${host}:${port}`;
-        await axios.get(TEST_URL, {
-            proxy: protocol.startsWith('socks')
-                ? false
-                : { host, port: parseInt(port, 10), protocol: protocol + ':' },
+        const axiosConfig: any = {
             timeout: 10000,
-            ...(protocol.startsWith('socks') ? {} : {}),
-        });
+        };
+
+        if (!protocol.startsWith('socks')) {
+            axiosConfig.proxy = { host, port: parseInt(port, 10), protocol: protocol + ':' };
+            if (username && password) {
+                axiosConfig.proxy.auth = { username, password };
+            }
+        } else {
+            // Basic socks proxy not fully supported by naked axios, but we leave structure if needed
+        }
+
+        await axios.get(TEST_URL, axiosConfig);
         return { alive: true, latency: Date.now() - start };
     } catch {
         return { alive: false, latency: Date.now() - start };
@@ -103,14 +112,14 @@ export async function runProxySweep(): Promise<{ added: number; tested: number; 
     }
 
     // 3. Test all existing
-    const allRows = db.exec('SELECT id, host, port, protocol FROM proxies');
+    const allRows = db.exec('SELECT id, host, port, protocol, username, password FROM proxies');
     const allProxies = allRows.length ? allRows[0].values : [];
     let tested = 0;
     let purged = 0;
 
     for (const row of allProxies) {
-        const [id, host, port, protocol] = row as [string, string, string, string];
-        const result = await testProxy(host, port, protocol);
+        const [id, host, port, protocol, username, password] = row as [string, string, string, string, string, string];
+        const result = await testProxy(host, port, protocol, username, password);
         tested++;
 
         if (result.alive) {
@@ -134,14 +143,14 @@ export async function runProxySweep(): Promise<{ added: number; tested: number; 
 /**
  * Get a working proxy for scraping (best score first).
  */
-export function getBestProxy(): { host: string; port: string; protocol: string } | null {
+export function getBestProxy(): { host: string; port: string; protocol: string; username?: string; password?: string; } | null {
     const db = getDb();
     const rows = db.exec(
-        'SELECT host, port, protocol FROM proxies WHERE alive = 1 ORDER BY score DESC, latency_ms ASC LIMIT 1'
+        'SELECT host, port, protocol, username, password FROM proxies WHERE alive = 1 ORDER BY score DESC, latency_ms ASC LIMIT 1'
     );
     if (!rows.length || !rows[0].values.length) return null;
-    const [host, port, protocol] = rows[0].values[0] as [string, string, string];
-    return { host, port, protocol };
+    const [host, port, protocol, username, password] = rows[0].values[0] as [string, string, string, string, string];
+    return { host, port, protocol, username, password };
 }
 
 /**
@@ -150,12 +159,12 @@ export function getBestProxy(): { host: string; port: string; protocol: string }
 export function getAllProxies(): any[] {
     const db = getDb();
     const rows = db.exec(
-        'SELECT id, host, port, protocol, source, alive, latency_ms, score, last_checked, created_at FROM proxies ORDER BY score DESC'
+        'SELECT id, host, port, protocol, username, password, source, alive, latency_ms, score, last_checked, created_at FROM proxies ORDER BY score DESC'
     );
     if (!rows.length) return [];
     return rows[0].values.map((r: any) => ({
-        id: r[0], host: r[1], port: r[2], protocol: r[3], source: r[4],
-        alive: r[5], latency_ms: r[6], score: r[7], last_checked: r[8], created_at: r[9]
+        id: r[0], host: r[1], port: r[2], protocol: r[3], username: r[4], password: r[5], source: r[6],
+        alive: r[7], latency_ms: r[8], score: r[9], last_checked: r[10], created_at: r[11]
     }));
 }
 
@@ -192,19 +201,21 @@ export function deleteProxy(id: string): boolean {
  */
 export async function processBulkProxies(text: string): Promise<{ totalFound: number; added: number }> {
     const db = getDb();
-    // Regex matches optional protocol, then IP, then PORT. 
-    // Examples: 192.168.0.1:8080 or http://10.0.0.1:3128
-    const proxyRegex = /(?:(https?|socks[45]):\/\/)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)/g;
-    const foundProxies: { host: string; port: string; protocol: string }[] = [];
+
+    // Suporta: 192.168.0.1:8080 ou http://192.168.0.1:8080 ou 192.168.0.1:8080:user:pass (comum em listas premium)
+    const proxyRegex = /(?:(https?|socks[45]):\/\/)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)(?::([^\s:]+):([^\s:]+))?/g;
+    const foundProxies: ProxyEntry[] = [];
     let match;
 
     while ((match = proxyRegex.exec(text)) !== null) {
-        const protocol = match[1] || 'http'; // Default to http if not specified
+        const protocol = match[1] || 'http';
         const host = match[2];
         const port = match[3];
-        // Ensure no duplicates in the same batch
+        const username = match[4];
+        const password = match[5];
+
         if (!foundProxies.some(p => p.host === host && p.port === port)) {
-            foundProxies.push({ host, port, protocol });
+            foundProxies.push({ host, port, protocol, username, password, source: 'manual' });
         }
     }
 
@@ -213,26 +224,25 @@ export async function processBulkProxies(text: string): Promise<{ totalFound: nu
     log.info('PROXY', `Testando ${foundProxies.length} proxies extraídos em lote...`);
     let added = 0;
 
-    // Teste em lote (batches de 20 para não sobrecarregar)
     const BATCH_SIZE = 20;
     for (let i = 0; i < foundProxies.length; i += BATCH_SIZE) {
         const batch = foundProxies.slice(i, i + BATCH_SIZE);
         const testPromises = batch.map(async (p) => {
-            const result = await testProxy(p.host, p.port, p.protocol);
+            const result = await testProxy(p.host, p.port, p.protocol, p.username, p.password);
             if (result.alive) {
                 try {
                     db.run(
-                        `INSERT INTO proxies (id, host, port, protocol, source, alive, score, latency_ms, last_checked)
-                         VALUES (?, ?, ?, ?, 'manual', 1, 100, ?, datetime('now'))
+                        `INSERT INTO proxies (id, host, port, protocol, username, password, source, alive, score, latency_ms, last_checked)
+                         VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, 100, ?, datetime('now'))
                          ON CONFLICT(host, port) DO UPDATE SET 
-                            alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), source = 'manual'`,
-                        [crypto.randomUUID(), p.host, p.port, p.protocol, result.latency, result.latency]
+                            alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), username = ?, password = ?, source = 'manual'`,
+                        [crypto.randomUUID(), p.host, p.port, p.protocol, p.username, p.password, result.latency, result.latency, p.username, p.password]
                     );
                     added++;
                 } catch { /* ignorar erro de parse sql */ }
             }
         });
-        await Promise.all(testPromises); // Espera o batch atual terminar
+        await Promise.all(testPromises);
     }
 
     saveDatabase();

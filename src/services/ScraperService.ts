@@ -27,6 +27,9 @@ function getAxiosConfig(): any {
     }
     if (proxy && !proxy.protocol.startsWith('socks')) {
         config.proxy = { host: proxy.host, port: parseInt(proxy.port, 10), protocol: proxy.protocol + ':' };
+        if (proxy.username && proxy.password) {
+            config.proxy.auth = { username: proxy.username, password: proxy.password };
+        }
     }
     return config;
 }
@@ -105,8 +108,17 @@ export async function fetchPalpites(): Promise<{
     let browser;
     try {
         log.info('SCRAPER', 'Buscando Palpites via Puppeteer...');
-        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+        const proxy = getBestProxy();
+        const args = ['--no-sandbox'];
+        if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
+
+        browser = await puppeteer.launch({ headless: true, args });
         const page = await browser.newPage();
+
+        if (proxy?.username && proxy?.password) {
+            await page.authenticate({ username: proxy.username, password: proxy.password });
+        }
+
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
         await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
@@ -206,8 +218,17 @@ export async function fetchCotacoes(): Promise<{ modalidade: string; valor: stri
     let browser;
     try {
         log.info('SCRAPER', 'Buscando cotações via Puppeteer no domínio amigosdobicho.com...');
-        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+        const proxy = getBestProxy();
+        const args = ['--no-sandbox'];
+        if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
+
+        browser = await puppeteer.launch({ headless: true, args });
         const page = await browser.newPage();
+
+        if (proxy?.username && proxy?.password) {
+            await page.authenticate({ username: proxy.username, password: proxy.password });
+        }
+
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
         await page.goto(COTACAO_URL, { waitUntil: 'networkidle0', timeout: 30000 });
 
@@ -254,8 +275,17 @@ export async function fetchHoroscopo() {
     let browser;
     try {
         log.info('SCRAPER', 'Iniciando extração multi-página de Horóscopo em ojogodobicho.com...');
-        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+        const proxy = getBestProxy();
+        const args = ['--no-sandbox'];
+        if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
+
+        browser = await puppeteer.launch({ headless: true, args });
         const page = await browser.newPage();
+
+        if (proxy?.username && proxy?.password) {
+            await page.authenticate({ username: proxy.username, password: proxy.password });
+        }
+
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
         const signosResults: any[] = [];
