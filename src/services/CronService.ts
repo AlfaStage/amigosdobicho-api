@@ -1,237 +1,283 @@
-import { CronJob } from 'cron';
-import { AmigosDoBichoService } from './AmigosDoBichoService.js';
-import { HoroscopoScraper } from '../scrapers/HoroscopoScraper.js';
-import { ContentScraper } from '../scrapers/ContentScraper.js';
-import { PalpitesScraper } from '../scrapers/PalpitesScraper.js';
-import { CotacaoScraper } from '../scrapers/CotacaoScraper.js';
-import { LOTERIAS } from '../config/loterias.js';
-import { logger } from '../utils/logger.js';
-import db from '../db.js';
+import cron from 'node-cron';
+import { LOTERICAS } from '../config/lotericas.js';
+import { getDb, saveDatabase } from '../database/schema.js';
+import { todayStr } from '../utils/helpers.js';
+import { fetchAllResultados, fetchPalpites, savePalpites, fetchCotacoes, saveCotacoes } from './ScraperService.js';
+import { ingestResult, type ResultadoInput } from './AmigosDoBichoService.js';
+import { notifyAll } from './WebhookService.js';
+import { runProxySweep } from './ProxyService.js';
+import { mapLotteryToSlug } from '../utils/helpers.js';
+import { calcularGrupo, calcularBicho } from '../config/bichos.js';
+import { log } from '../utils/Logger.js';
 
-export class CronService {
-    private apiService = new AmigosDoBichoService();
-    private horoscopo = new HoroscopoScraper();
-    private content = new ContentScraper();
-    private palpites = new PalpitesScraper();
-    private cotacao = new CotacaoScraper();
-    private jobs: CronJob[] = [];
-    private isStarted = false;
-    private serviceName = 'CronService';
-    private horoscopoCompletoHoje = false;
-    private horoscopoJobHora?: CronJob;
+const DELAY_MS = 60_000; // 1 minute delay after scheduled time
 
-    constructor() {
-        logger.info(this.serviceName, 'Instância criada. Aguardando start()...');
-    }
+/**
+ * Initializes all cron jobs.
+ */
+export function initCronJobs(): void {
+    log.separator('CRON', 'SCHEDULERS');
+    log.info('CRON', 'Inicializando schedulers...');
 
-    async start() {
-        if (this.isStarted) {
-            logger.warn(this.serviceName, 'Já está rodando, ignorando chamada duplicada');
-            return;
+    // Every minute: check if any lottery draw should be fetched
+    cron.schedule('* * * * *', () => checkScheduledDraws());
+
+    // Morning 07:00: fetch palpites and cotações
+    cron.schedule('0 7 * * *', () => morningRoutine());
+
+    // Every hour: proxy sweep
+    cron.schedule('0 * * * *', () => {
+        runProxySweep().catch(err => log.error('PROXY', 'Proxy sweep falhou', err));
+    });
+
+    // Every 10 minutes: retry failed scraping
+    cron.schedule('*/10 * * * *', () => retryFailed());
+
+    // Último dia do mês às 23:00: auditoria de marketing e hot-swap
+    cron.schedule('0 23 28-31 * *', () => {
+        // Verifica se o dia seguinte é dia 1 (ou seja, hoje é o último dia do mês)
+        const amanhã = new Date();
+        amanhã.setDate(amanhã.getDate() + 1);
+
+        if (amanhã.getDate() === 1) {
+            log.info('CRON', 'Último dia do mês detectado. Executando checkup e Hot-Swap das lotéricas...');
+            import('./MarketingAuditService.js').then(module => {
+                module.MarketingAuditService.runAudit().catch(err => {
+                    log.error('CRON', 'Falha na auditoria mensal de marketing.', err);
+                });
+            }).catch(e => {
+                log.error('CRON', 'Erro ao carregar módulo MarketingAuditService.', e);
+            });
         }
-        this.isStarted = true;
+    });
 
+    log.info('CRON', 'Schedulers ativos:', {
+        draw_monitor: '1min',
+        morning_palpites: '07:00',
+        proxy_sweep: '1h',
+        retry_failed: '10min',
+        monthly_audit: '23:00 ultimo dia_mes',
+    });
+}
 
-        // Auto Backfill na inicialização - REMOVIDO A PEDIDO DO USUÁRIO
-        // O backfill deve ser feito manualmente ou via script específico.
-        // this.apiService.backfillSevenDays().catch(err => {
-        //     logger.error(this.serviceName, 'Erro no backfill inicial:', err);
-        // });
+/**
+ * Checks if any draw should be fetched right now.
+ */
+async function checkScheduledDraws(): Promise<void> {
+    const now = new Date();
+    const today = todayStr();
+    const db = getDb();
 
+    const groupedByLottery: Record<string, string[]> = {};
 
-        // 1. Smart Scheduler (A cada 1 minuto para verificar novos sorteios)
-        this.jobs.push(
-            new CronJob('*/1 * * * *', () => this.runResultsCheck(), null, true, 'America/Sao_Paulo')
-        );
+    for (const lot of LOTERICAS) {
+        for (const horarioObj of lot.horarios) {
+            const horarioStr = horarioObj.horario;
 
-        // 2. Horóscopo (06:00 DIARIO)
-        this.jobs.push(
-            new CronJob('0 6 * * *', () => this.runHoroscopo6h(), null, true, 'America/Sao_Paulo')
-        );
+            // Check if today's day of the week is allowed for this schedule
+            if (!horarioObj.dias.includes(now.getDay())) {
+                continue;
+            }
 
+            const [h, m] = horarioStr.split(':').map(Number);
+            const scheduled = new Date(now);
+            scheduled.setHours(h, m, 0, 0);
 
-        // 3. Palpites do Dia (07:00 DIARIO)
-        this.jobs.push(
-            new CronJob('0 7 * * *', () => this.palpites.execute([], 'palpites'), null, true, 'America/Sao_Paulo')
-        );
+            const elapsed = now.getTime() - scheduled.getTime();
 
-        // 4. Bingos - OBSOLETO VIA SCRAPER?
-        // O usuário pediu que "toda vez q sair um resultado o sistema ira conferir se algum palpite bateu"
-        // Então o processamento de bingo agora é EVENT-DRIVEN no AmigosDoBichoService.
-        // Mantemos o job original apenas se for necessário "Scraping de Bingos Externos",
-        // mas o request diz "mudas como funciona o bingo (resultados dos palpites)".
-        // Se a ideia é calcular bingo INTERNAMENTE, o scraper de bingos pode ser desativado ou mantido como fallback.
-        // Vou manter comentado para não conflitar com a nova lógica.
-        // this.jobs.push(
-        //    new CronJob('30 23 * * *', () => this.palpites.execute([], 'bingos'), null, true, 'America/Sao_Paulo')
-        // );
+            // Window: between 1 min and 5 min after scheduled time
+            if (elapsed >= DELAY_MS && elapsed < 5 * 60_000) {
+                // Check if already processed
+                const statusRows = db.exec(
+                    "SELECT status FROM scraping_status WHERE loterica_slug = ? AND data = ? AND horario = ?",
+                    [lot.slug, today, horarioStr]
+                );
 
-        // 5. Conteúdo (Semanal)
-        this.jobs.push(
-            new CronJob('0 9 * * 1', () => this.runContent(), null, true, 'America/Sao_Paulo')
-        );
-
-        // 6. Cotações (00:00 DIARIO)
-        this.jobs.push(
-            new CronJob('0 0 * * *', () => this.runCotacoes(), null, true, 'America/Sao_Paulo')
-        );
-
-        logger.success(this.serviceName, 'Smart Scheduler iniciado');
-    }
-
-    // Métodos auxiliares de Palpites/Horóscopo/Cotações mantidos iguais...
-    async checkPalpitesOnStartup(): Promise<void> {
-        const today = new Date().toISOString().split('T')[0];
-        const exists = db.prepare('SELECT id FROM palpites_dia WHERE data = ?').get(today);
-        if (exists) {
-            logger.info(this.serviceName, `Palpites de hoje (${today}) já existem.`);
-            return;
-        }
-        if (this.horoscopoCompletoHoje) {
-            await this.runPalpites();
-        }
-    }
-
-    async checkHoroscopoOnStartup(): Promise<void> {
-        // Lógica mantida...
-        const today = new Date().toISOString().split('T')[0];
-        const check = db.prepare('SELECT count(*) as count FROM horoscopo_diario WHERE data = ?').get(today) as { count: number };
-        if (check && check.count >= 12) {
-            this.horoscopoCompletoHoje = true;
-            await this.runPalpites();
-            return;
-        }
-        const nowBr = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-        if (nowBr.getHours() >= 6) {
-            await this.runHoroscopoWithRetry();
-        }
-    }
-
-    async checkCotacoesOnStartup(): Promise<void> {
-        const today = new Date().toISOString().split('T')[0];
-        const check = db.prepare("SELECT count(*) as count FROM cotacoes WHERE date(updated_at) = ?").get(today) as { count: number };
-        if (check && check.count > 0) return;
-        await this.runCotacoes();
-    }
-
-    private async runResultsCheck() {
-        // Verifica quais loterias acabaram de ocorrer (1 min de delay)
-        const now = new Date();
-        const nowBr = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-        const DELAY_MS = 60 * 1000; // 1 min
-
-        const statesToCheck = new Set<string>();
-        const dataHoje = nowBr.toISOString().split('T')[0];
-
-        for (const loteria of LOTERIAS) {
-            if (!loteria.horarios) continue;
-            for (const horario of loteria.horarios) {
-                const [h, m] = horario.split(':').map(Number);
-                const drawTime = new Date(nowBr.getFullYear(), nowBr.getMonth(), nowBr.getDate(), h, m, 0);
-
-                // Janela de execução: entre drawTime + 1min e drawTime + 2min
-                // Para garantir que executamos logo após o tempo de delay
-                const targetTime = new Date(drawTime.getTime() + DELAY_MS);
-                const diff = nowBr.getTime() - targetTime.getTime();
-
-                // Se passou do horário alvo, mas não muito (ex: até 5 min depois, tente buscar)
-                if (diff >= 0 && diff < 5 * 60 * 1000) {
-                    // Extrair estado do slug (ex: pt-rio -> RJ, bandeirantes -> SP)
-                    // Config/Loterias.ts não tem campo 'state', vamos inferir ou adicionar no futuro.
-                    // Por enquanto, hardcode mapping baseado no ID ou Slug
-                    const state = this.inferState(loteria);
-                    if (state) statesToCheck.add(state);
+                if (statusRows.length && statusRows[0].values.length) {
+                    const status = statusRows[0].values[0][0] as string;
+                    if (status === 'success') continue;
+                } else {
+                    // Create pending entry
+                    db.run(
+                        `INSERT OR IGNORE INTO scraping_status (id, loterica_slug, data, horario, status)
+             VALUES (?, ?, ?, ?, 'pending')`,
+                        [crypto.randomUUID(), lot.slug, today, horarioStr]
+                    );
                 }
-            }
-        }
 
-        if (statesToCheck.size > 0) {
-            logger.info(this.serviceName, `Verificando resultados para estados: ${Array.from(statesToCheck).join(', ')}`);
-            for (const state of statesToCheck) {
-                await this.apiService.fetchResults(dataHoje, state);
+                if (!groupedByLottery[lot.slug]) groupedByLottery[lot.slug] = [];
+                groupedByLottery[lot.slug].push(horarioStr);
             }
         }
     }
 
-    private inferState(loteria: any): string | null {
-        const id = loteria.id as string;
-        if (id.startsWith('rj')) return 'RJ';
-        if (id.startsWith('sp')) return 'SP';
-        if (id.startsWith('go')) return 'GO';
-        if (id.startsWith('mg')) return 'MG';
-        if (id.startsWith('ba')) return 'BA';
-        if (id.startsWith('pb')) return 'PB';
-        if (id.startsWith('pe')) return 'PE';
-        if (id.startsWith('ce')) return 'CE';
-        if (id.startsWith('df')) return 'DF';
-        if (id.startsWith('rn')) return 'RN';
-        if (id.startsWith('rs')) return 'RS';
-        if (id.startsWith('se')) return 'SE';
-        if (id === 'br-federal') return 'FEDERAL';
-        if (id === 'br-nacional') return 'NACIONAL';
-        if (id === 'br-tradicional') return 'TRADICIONAL';
-        return null;
-    }
-
-    private async runHoroscopo6h() {
-        this.horoscopoCompletoHoje = false;
-        await this.runHoroscopoWithRetry();
-    }
-
-    private async runHoroscopoWithRetry(): Promise<void> {
-        if (this.horoscopoCompletoHoje) return;
-        try {
-            await this.horoscopo.execute();
-            const today = new Date().toISOString().split('T')[0];
-            const check = db.prepare('SELECT count(*) as count FROM horoscopo_diario WHERE data = ?').get(today) as { count: number };
-            if (check && check.count >= 12) {
-                this.horoscopoCompletoHoje = true;
-                if (this.horoscopoJobHora) {
-                    this.horoscopoJobHora.stop();
-                    this.horoscopoJobHora = undefined;
-                }
-                await this.runPalpites();
-            } else {
-                this.scheduleHoroscopoRetry();
-            }
-        } catch (e) {
-            this.scheduleHoroscopoRetry();
+    for (const [slug, horarios] of Object.entries(groupedByLottery)) {
+        const lot = LOTERICAS.find(l => l.slug === slug);
+        if (lot) {
+            await scrapeForLotteryGroup(lot.slug, lot.estado, today, horarios);
         }
-    }
-
-    private scheduleHoroscopoRetry(): void {
-        if (this.horoscopoJobHora) return;
-        this.horoscopoJobHora = new CronJob('0 * * * *', async () => {
-            if (this.horoscopoCompletoHoje) {
-                this.horoscopoJobHora?.stop();
-                this.horoscopoJobHora = undefined;
-                return;
-            }
-            await this.runHoroscopoWithRetry();
-        }, null, true, 'America/Sao_Paulo');
-    }
-
-    private async runContent() {
-        await this.content.execute().catch(console.error);
-    }
-
-    private async runPalpites() {
-        // ... (Mesma lógica)
-        const nowBr = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-        if (nowBr.getHours() < 6) return;
-        await this.palpites.execute([], 'palpites').catch(console.error);
-    }
-
-    private async runCotacoes() {
-        await this.cotacao.execute().catch(console.error);
-    }
-
-    stop() {
-        if (!this.isStarted) return;
-        this.jobs.forEach(job => job.stop());
-        if (this.horoscopoJobHora) this.horoscopoJobHora.stop();
-        this.isStarted = false;
-        logger.success(this.serviceName, 'Todos os jobs parados');
     }
 }
 
+/**
+ * Scrapes results for a specific lottery group (grouping missing times).
+ */
+async function scrapeForLotteryGroup(slug: string, estado: string, data: string, horarios: string[]): Promise<void> {
+    const db = getDb();
+
+    try {
+        log.info('SCRAPER', `Buscando ${slug} para ${data} ${horarios.join(', ')}...`, { estado });
+        const results = await fetchAllResultados();
+        const notFound: string[] = [];
+
+        for (const horario of horarios) {
+            let found = false;
+
+            for (const r of results) {
+                const mappedSlug = mapLotteryToSlug(r.lottery || r.name || '', estado);
+                if (mappedSlug !== slug) continue;
+
+                // STRICT TIME MATCH: Validate result time from API against scheduled slot
+                const apiTime = r.time ? r.time.split(':').slice(0, 2).map((v: string) => v.padStart(2, '0')).join(':') : null;
+                const slotTime = horario.split(':').slice(0, 2).map(v => v.padStart(2, '0')).join(':');
+
+                if (apiTime && slotTime) {
+                    const [apiH, apiM] = apiTime.split(':').map(Number);
+                    const [slotH, slotM] = slotTime.split(':').map(Number);
+                    const diffMins = Math.abs((apiH * 60 + apiM) - (slotH * 60 + slotM));
+
+                    if (diffMins > 35) {
+                        // Skip if the result is for a different time (tolerance of 35 mins for nominal vs actual draw time)
+                        continue;
+                    }
+                }
+
+                const premios = (r.results || r.prizes || r.premios || []).map((p: any, i: number) => ({
+                    posicao: p.premio || p.position || p.posicao || i + 1,
+                    milhar: String(p.milhar || p.number || p.numero || '').padStart(4, '0'),
+                }));
+
+                if (premios.length === 0) continue;
+
+                const input: ResultadoInput = {
+                    loterica: slug,
+                    estado,
+                    data,
+                    horario,
+                    nome_original: r.name || r.lottery || '',
+                    premios,
+                };
+
+                const result = ingestResult(input);
+                if (result.saved) {
+                    found = true;
+                    // Update scraping status
+                    db.run(
+                        `UPDATE scraping_status SET status = 'success', updated_at = datetime('now')
+               WHERE loterica_slug = ? AND data = ? AND horario = ?`,
+                        [slug, data, horario]
+                    );
+                    saveDatabase();
+                    log.success('SCRAPER', `Resultado salvo: ${slug} ${horario}`, { id: result.id });
+
+                    // Notify webhooks
+                    await notifyAll('resultado.novo', {
+                        loterica: slug, data, horario, resultado_id: result.id
+                    }).catch(() => { });
+                    break;
+                }
+            }
+
+            if (!found) {
+                db.run(
+                    `UPDATE scraping_status SET status = 'retrying', tentativas = tentativas + 1,
+             updated_at = datetime('now') WHERE loterica_slug = ? AND data = ? AND horario = ?`,
+                    [slug, data, horario]
+                );
+                saveDatabase();
+                notFound.push(horario);
+            }
+        }
+
+        if (notFound.length > 0) {
+            log.warn('SCRAPER', `⚠️  Resultado não encontrado: ${slug} ${notFound.join(', ')} (retrying)`);
+        }
+
+    } catch (err: any) {
+        log.error('SCRAPER', `Erro no scraping ${slug} ${horarios.join(', ')}`, err);
+        for (const h of horarios) {
+            db.run(
+                `UPDATE scraping_status SET status = 'error', ultimo_erro = ?,
+           tentativas = tentativas + 1, updated_at = datetime('now')
+           WHERE loterica_slug = ? AND data = ? AND horario = ?`,
+                [err.message, slug, data, h]
+            );
+        }
+        saveDatabase();
+    }
+}
+
+/**
+ * Retry failed/retrying scraping tasks.
+ */
+async function retryFailed(): Promise<void> {
+    const db = getDb();
+    const rows = db.exec(
+        `SELECT loterica_slug, data, horario FROM scraping_status
+     WHERE status IN ('retrying', 'error') AND data = ?`,
+        [todayStr()]
+    );
+
+    if (!rows.length || !rows[0].values.length) return;
+
+    log.info('CRON', `Retentando ${rows[0].values.length} scraping(s) falhados...`);
+
+    const groupedByLottery: Record<string, string[]> = {};
+    for (const row of rows[0].values) {
+        const [slug, data, horario] = row as [string, string, string];
+        if (!groupedByLottery[slug]) groupedByLottery[slug] = [];
+        groupedByLottery[slug].push(horario);
+    }
+
+    for (const [slug, horarios] of Object.entries(groupedByLottery)) {
+        const lot = LOTERICAS.find(l => l.slug === slug);
+        if (lot) {
+            await scrapeForLotteryGroup(slug, lot.estado, todayStr(), horarios);
+        }
+    }
+}
+
+/**
+ * Morning routine: palpites + cotações at 07:00.
+ */
+async function morningRoutine(): Promise<void> {
+    const today = todayStr();
+    log.separator('CRON', 'ROTINA MATINAL');
+    log.info('CRON', `Rotina matinal para ${today}...`);
+
+    // Palpites
+    try {
+        const palpites = await fetchPalpites();
+        if (palpites.grupos.length || palpites.milhares.length) {
+            savePalpites(today, palpites);
+            log.success('CRON', 'Palpites salvos', { grupos: palpites.grupos.length, milhares: palpites.milhares.length });
+        } else {
+            log.warn('CRON', 'Palpites: API retornou vazio');
+        }
+    } catch (err) {
+        log.error('CRON', 'Erro ao buscar palpites', err);
+    }
+
+    // Cotações
+    try {
+        const cotacoes = await fetchCotacoes();
+        if (cotacoes.length) {
+            saveCotacoes(cotacoes);
+            log.success('CRON', 'Cotações salvas', { total: cotacoes.length });
+        } else {
+            log.warn('CRON', 'Cotações: API retornou vazio');
+        }
+    } catch (err) {
+        log.error('CRON', 'Erro ao buscar cotações', err);
+    }
+}

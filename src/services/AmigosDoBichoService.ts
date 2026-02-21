@@ -1,194 +1,245 @@
-import axios from 'axios';
-import { logger } from '../utils/logger.js';
-import db from '../db.js';
-import { randomUUID } from 'crypto';
-import { WebhookService } from './WebhookService.js';
-import { BingoService } from './BingoService.js';
+import { getDb, saveDatabase } from '../database/schema.js';
+import { calcularGrupo, calcularBicho } from '../config/bichos.js';
+import { mapLotteryToSlug } from '../utils/helpers.js';
+import { log } from '../utils/Logger.js';
+import { notifyAll } from './WebhookService.js';
 
-interface ApiResult {
-    id: number;
-    dt_created: string;
-    name: string;
-    time: string;
-    results: {
-        premio: number;
-        milhar: string;
-        grupo: string | null;
-        animal: string | null;
-    }[];
-    raffle: {
-        id: number;
-        active: number;
-        state: string;
-        lottery: string;
-        time: string;
-        nickname: string;
-    };
+export interface PremioInput {
+    posicao: number;
+    milhar: string;
 }
 
-export class AmigosDoBichoService {
-    private readonly baseUrl = 'https://api.amigosdobicho.com/raffle-results';
-    private readonly token = process.env.AMIGOS_API_TOKEN || '';
-    private webhookService = new WebhookService();
-    private bingoService = new BingoService();
-    private serviceName = 'AmigosDoBichoService';
+export interface ResultadoInput {
+    loterica: string;
+    estado?: string;
+    data: string;
+    horario: string;
+    nome_original?: string;
+    premios: PremioInput[];
+}
 
-    constructor() { }
+/**
+ * Core domain service for ingesting lottery results.
+ * Handles slug mapping, uniqueness checks, atomic transactions,
+ * and post-commit hooks (webhooks + premiados check).
+ */
+export function ingestResult(input: ResultadoInput): { saved: boolean; id?: string } {
+    const db = getDb();
+    const slug = mapLotteryToSlug(input.loterica, input.estado);
 
-    /**
-     * Busca resultados filtrados por estado e data
-     * @param date Data no formato YYYY-MM-DD
-     * @param state Sigla do estado (SP, RJ, Federal, etc.)
-     */
-    async fetchResults(date: string, state: string): Promise<void> {
-        try {
-            const url = `${this.baseUrl}/filter`;
-            const response = await axios.get<ApiResult[]>(url, {
-                headers: {
-                    'x-api-token': this.token
-                },
-                params: {
-                    state: state,
-                    date: date
-                }
-            });
+    if (!slug) {
+        log.warn('SCRAPER', `Slug não encontrado: "${input.loterica}" (${input.estado})`);
+        return { saved: false };
+    }
 
-            const results = response.data;
-            if (!results || results.length === 0) {
-                logger.info(this.serviceName, `Nenhum resultado encontrado para ${state} em ${date}`);
-                return;
+    // Normalize time to HH:mm to avoid duplicates like "12:00" vs "12:00:00"
+    const normalizedTime = input.horario.includes(':')
+        ? input.horario.split(':').slice(0, 2).map(v => v.padStart(2, '0')).join(':')
+        : input.horario;
+
+    // Uniqueness check
+    const nomeVal = input.nome_original || '';
+    const existing = db.exec(
+        "SELECT id FROM resultados WHERE data = ? AND horario = ? AND loterica_slug = ? AND nome_original = ?",
+        [input.data, normalizedTime, slug, nomeVal]
+    );
+
+    if (existing.length > 0 && existing[0].values.length > 0) {
+        return { saved: false };
+    }
+
+    // Atomic transaction
+    const resultadoId = crypto.randomUUID();
+
+    db.run('BEGIN TRANSACTION');
+    try {
+        db.run(
+            'INSERT INTO resultados (id, data, horario, loterica_slug, nome_original) VALUES (?, ?, ?, ?, ?)',
+            [resultadoId, input.data, normalizedTime, slug, nomeVal]
+        );
+
+        const stmtPremio = db.prepare(
+            'INSERT INTO premios (id, resultado_id, posicao, milhar, grupo, bicho) VALUES (?, ?, ?, ?, ?, ?)'
+        );
+
+        for (const p of input.premios) {
+            const grupo = calcularGrupo(p.milhar);
+            const bicho = calcularBicho(p.milhar);
+            stmtPremio.run([crypto.randomUUID(), resultadoId, p.posicao, p.milhar, grupo, bicho]);
+        }
+
+        stmtPremio.free();
+        db.run('COMMIT');
+
+        saveDatabase();
+        log.success('DB', `Resultado salvo: ${slug} ${input.data} ${input.horario}`, { premios: input.premios.length });
+
+        // Post-commit: check palpites premiados for ALL results of the day (retroactive scan)
+        checkPalpitesPremiados(input.data);
+
+        return { saved: true, id: resultadoId };
+    } catch (err) {
+        db.run('ROLLBACK');
+        log.error('DB', `Transação falhou para ${slug}`, err);
+        return { saved: false };
+    }
+}
+
+/**
+ * Checks if any of today's palpites match the drawn results.
+ * Scans ALL results of the given date to ensure retroactive prizes are captured.
+ */
+export function checkPalpitesPremiados(data: string): void {
+    const db = getDb();
+
+    // Get today's palpite
+    const palpiteRows = db.exec("SELECT id FROM palpites_dia WHERE data = ?", [data]);
+    if (!palpiteRows.length || !palpiteRows[0].values.length) return;
+
+    const palpiteId = palpiteRows[0].values[0][0] as string;
+
+    // Load Palpites
+    const milharesRows = db.exec("SELECT numero FROM palpites_milhares WHERE palpite_id = ?", [palpiteId]);
+    const milharesPalpite = milharesRows.length ? milharesRows[0].values.map((r: any) => r[0] as string) : [];
+
+    const centenasRows = db.exec("SELECT numero FROM palpites_centenas WHERE palpite_id = ?", [palpiteId]);
+    const centenasPalpite = centenasRows.length ? centenasRows[0].values.map((r: any) => r[0] as string) : [];
+
+    const gruposRows = db.exec("SELECT grupo FROM palpites_grupos WHERE palpite_id = ?", [palpiteId]);
+    const gruposPalpite = gruposRows.length ? gruposRows[0].values.map((r: any) => r[0] as number) : [];
+
+    // Get ALL results for the day
+    const results = getResultados(data);
+
+    for (const res of results) {
+        const extracao = res.nome_original && res.nome_original.trim() !== ''
+            ? res.nome_original
+            : `${res.loterica_slug} - ${res.horario}`;
+
+        for (const p of res.premios) {
+            const premioLabel = `${p.posicao}º Prêmio`;
+            const grupo = calcularGrupo(p.milhar);
+            const centena = p.milhar.slice(-3);
+
+            // Milhar match
+            if (milharesPalpite.includes(p.milhar)) {
+                insertPremiado(palpiteId, 'milhar', p.milhar, extracao, premioLabel, data, res.loterica_slug);
             }
 
-            logger.info(this.serviceName, `Encontrados ${results.length} resultados para ${state} em ${date}`);
-
-            for (const result of results) {
-                await this.processResult(result);
+            // Centena match
+            if (centenasPalpite.includes(centena)) {
+                insertPremiado(palpiteId, 'centena', centena, extracao, premioLabel, data, res.loterica_slug);
             }
 
-        } catch (error: any) {
-            logger.error(this.serviceName, `Erro ao buscar resultados para ${state} em ${date}: ${error.message}`);
+            // Grupo match (ANY POSITION 1-10)
+            if (gruposPalpite.includes(grupo)) {
+                insertPremiado(palpiteId, 'grupo', `${calcularBicho(p.milhar)} (${String(grupo).padStart(2, '0')})`, extracao, premioLabel, data, res.loterica_slug);
+            }
         }
     }
+}
 
-    /**
-     * Processa e salva um resultado individual da API
-     */
-    private async processResult(apiResult: ApiResult): Promise<void> {
-        const { raffle, results, dt_created } = apiResult;
+function insertPremiado(palpiteId: string, tipo: string, numero: string, extracao: string, premio: string, data: string, slug: string): void {
+    const db = getDb();
+    try {
+        // Unique check: Strict check to avoid duplicate data AND duplicate webhooks
+        // We check by palpite, type, number, exact lottery/time and prize position
+        const existing = db.exec(
+            "SELECT id FROM palpites_premiados WHERE palpite_id = ? AND tipo = ? AND numero = ? AND extracao = ? AND premio = ? AND data = ?",
+            [palpiteId, tipo, numero, extracao, premio, data]
+        );
+        if (existing.length > 0 && existing[0].values.length > 0) return;
 
-        // Mapeamento de nome de loteria para slug interno
-        // TODO: Melhorar este mapeamento ou garantir que os slugs batam com os da API
-        const lotericaSlug = this.mapLotteryToSlug(raffle.lottery, raffle.state, raffle.nickname);
-        const horario = raffle.time.substring(0, 5); // HH:mm
-        const data = dt_created.split('T')[0];
+        const id = crypto.randomUUID();
+        db.run(
+            'INSERT INTO palpites_premiados (id, palpite_id, tipo, numero, extracao, premio, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [id, palpiteId, tipo, numero, extracao, premio, data]
+        );
 
-        // Verificar se já existe
-        const exists = db.prepare('SELECT id FROM resultados WHERE loterica_slug = ? AND data = ? AND horario = ?')
-            .get(lotericaSlug, data, horario) as { id: string } | undefined;
+        log.success('SCRAPER', `Premiado! ${tipo}: ${numero} em ${extracao} (${premio})`);
+        saveDatabase();
 
-        if (exists) {
-            // Se já existe, não faz nada (ou atualiza se necessário)
-            return;
-        }
+        // Dispatch individual Webhook for this specific hit
+        notifyAll('palpite.premiado', {
+            id,
+            palpite_id: palpiteId,
+            tipo,
+            numero,
+            extracao,
+            premio,
+            data,
+            loterica: slug
+        });
 
-        const id = randomUUID();
-        const premios = results.map(r => ({
-            id: randomUUID(),
-            resultado_id: id,
-            posicao: r.premio,
-            milhar: r.milhar,
-            grupo: r.grupo ? parseInt(r.grupo) : this.calculaGrupo(r.milhar),
-            bicho: r.animal || this.calculaBicho(r.milhar)
-        }));
-
-        try {
-            const insertResultado = db.prepare('INSERT INTO resultados (id, data, horario, loterica_slug, created_at) VALUES (?, ?, ?, ?, ?)');
-            const insertPremio = db.prepare('INSERT INTO premios (id, resultado_id, posicao, milhar, grupo, bicho) VALUES (?, ?, ?, ?, ?, ?)');
-
-            const transaction = db.transaction(() => {
-                insertResultado.run(id, data, horario, lotericaSlug, new Date().toISOString());
-                for (const p of premios) {
-                    insertPremio.run(p.id, p.resultado_id, p.posicao, p.milhar, p.grupo, p.bicho);
-                }
-            });
-
-            transaction();
-            logger.success(this.serviceName, `Novo resultado salvo: ${raffle.nickname} (${data} ${horario})`);
-
-            // Disparar Webhooks
-            this.webhookService.notifyAll('novo_resultado', {
-                id,
-                data,
-                horario,
-                loterica: raffle.nickname,
-                premios: premios.map(p => ({ posicao: p.posicao, milhar: p.milhar, grupo: p.grupo, bicho: p.bicho }))
-            }).catch(() => { });
-
-            // Verificar Bingo
-            this.bingoService.checkBingo(id, data, lotericaSlug, premios).catch(err => {
-                logger.error(this.serviceName, `Erro ao verificar bingo para ${id}: ${err.message}`);
-            });
-
-        } catch (error: any) {
-            logger.error(this.serviceName, `Erro ao salvar resultado ${raffle.nickname}: ${error.message}`);
-        }
+    } catch (err) {
+        log.error('DB', 'Erro ao inserir premiado', err);
     }
+}
 
-    /**
-     * Realiza o backfill dos últimos 7 dias para todos os estados configurados
-     */
-    async backfillSevenDays(): Promise<void> {
-        logger.info(this.serviceName, 'Iniciando backfill de 7 dias...');
-        const states = ['SP', 'RJ', 'PB', 'RS', 'CE', 'BA', 'GO', 'MG', 'DF', 'PE', 'SE', 'FEDERAL']; // Lista de estados suportados
-        const today = new Date();
+/**
+ * Get results for a specific date and optional loterica slug.
+ */
+export function getResultados(data: string, loterica?: string): any[] {
+    const db = getDb();
+    let query = `
+    SELECT r.id, r.data, r.horario, r.loterica_slug, r.nome_original, r.created_at,
+           l.nome as loterica_nome, l.estado
+    FROM resultados r
+    JOIN lotericas l ON l.slug = r.loterica_slug
+    WHERE r.data = ?
+  `;
+    const params: any[] = [data];
+    if (loterica) { query += ' AND r.loterica_slug = ?'; params.push(loterica); }
+    query += ' ORDER BY r.data DESC, r.horario DESC';
 
-        for (let i = 0; i < 7; i++) {
-            const date = new Date(today);
-            date.setDate(today.getDate() - i);
-            const dateString = date.toISOString().split('T')[0];
+    const rows = db.exec(query, params);
+    if (!rows.length) return [];
 
-            logger.info(this.serviceName, `Backfill dia ${dateString}...`);
+    return rows[0].values.map((row: any[]) => {
+        const id = row[0] as string;
+        const premiosRows = db.exec(
+            'SELECT posicao, milhar, grupo, bicho FROM premios WHERE resultado_id = ? ORDER BY posicao',
+            [id]
+        );
+        const premios = premiosRows.length ? premiosRows[0].values.map((p: any[]) => ({
+            posicao: p[0], milhar: p[1], grupo: p[2], bicho: p[3]
+        })) : [];
 
-            // Promise.all para paralelar os estados do dia
-            await Promise.all(states.map(state => this.fetchResults(dateString, state)));
-        }
-        logger.success(this.serviceName, 'Backfill concluído.');
-    }
+        return {
+            id: row[0], data: row[1], horario: row[2], loterica_slug: row[3],
+            nome_original: row[4], created_at: row[5], loterica_nome: row[6], estado: row[7], premios
+        };
+    });
+}
 
-    // Auxiliares
 
-    private calculaGrupo(milhar: string): number {
-        const dezenas = parseInt(milhar.slice(-2));
-        if (dezenas === 0) return 25;
-        return Math.ceil(dezenas / 4);
-    }
 
-    private calculaBicho(milhar: string): string {
-        const grupos = [
-            'Avestruz', 'Águia', 'Burro', 'Borboleta', 'Cachorro', 'Cabra', 'Carneiro', 'Camelo', 'Cobra', 'Coelho',
-            'Cavalo', 'Elefante', 'Galo', 'Gato', 'Jacaré', 'Leão', 'Macaco', 'Porco', 'Pavão', 'Peru',
-            'Touro', 'Tigre', 'Urso', 'Veado', 'Vaca'
-        ];
-        const grupo = this.calculaGrupo(milhar);
-        return grupos[grupo - 1] || 'Desconhecido';
-    }
+/**
+ * Get a single result by ID.
+ */
+export function getResultadoById(id: string): any | null {
+    const db = getDb();
+    const rows = db.exec(`
+    SELECT r.id, r.data, r.horario, r.loterica_slug, r.nome_original, r.created_at,
+           l.nome as loterica_nome, l.estado
+    FROM resultados r
+    JOIN lotericas l ON l.slug = r.loterica_slug
+    WHERE r.id = ?
+  `, [id]);
 
-    private mapLotteryToSlug(lottery: string, state: string, nickname: string): string {
-        // Lógica simples de mapeamento baseada no nickname ou lottery
-        // Tenta encontrar um slug correspondente na config ou gera um genérico
-        // O ideal é ter um mapa preciso, mas vamos tentar inferir
+    if (!rows.length || !rows[0].values.length) return null;
 
-        const normalized = (nickname + ' ' + lottery).toLowerCase();
+    const row = rows[0].values[0];
+    const premiosRows = db.exec(
+        'SELECT posicao, milhar, grupo, bicho FROM premios WHERE resultado_id = ? ORDER BY posicao',
+        [id]
+    );
+    const premios = premiosRows.length ? premiosRows[0].values.map((p: any) => ({
+        posicao: p[0], milhar: p[1], grupo: p[2], bicho: p[3]
+    })) : [];
 
-        if (state === 'RJ' && normalized.includes('pt')) return 'pt-rio';
-        if (state === 'SP' && normalized.includes('pt')) return 'pt-sp';
-        if (state === 'SP' && normalized.includes('bandeirantes')) return 'bandeirantes';
-        if (state === 'GO' && normalized.includes('look')) return 'look-goias';
-        if (state === 'GO' && normalized.includes('boa sorte')) return 'boa-sorte';
-        if (normalized.includes('federal')) return 'federal';
-        if (normalized.includes('nacional')) return 'loteria-nacional';
-
-        // Retorna um slug "safe" se não mapear direto, para não perder o dado
-        return `${state.toLowerCase()}-${lottery.toLowerCase().replace(/\s+/g, '-')}`;
-    }
+    return {
+        id: row[0], data: row[1], horario: row[2], loterica_slug: row[3],
+        nome_original: row[4], created_at: row[5], loterica_nome: row[6], estado: row[7], premios
+    };
 }

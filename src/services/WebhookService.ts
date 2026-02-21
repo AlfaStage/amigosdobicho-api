@@ -1,333 +1,178 @@
 import axios from 'axios';
-import db from '../db.js';
-import { randomUUID } from 'crypto';
-import { logger } from '../utils/logger.js';
-import { LOTERIAS } from '../config/loterias.js';
+import crypto from 'crypto';
+import { getDb, saveDatabase } from '../database/schema.js';
+import { log } from '../utils/Logger.js';
 
-export interface WebhookLog {
-    id: string;
-    webhook_id: string;
-    event: string;
-    payload: string;
-    status: 'success' | 'error';
-    status_code?: number;
-    response_body?: string;
-    error_message?: string;
-    created_at: string;
-}
+const MAX_CONSECUTIVE_FAILURES = 5;
 
-export interface WebhookLoterica {
-    id: string;
-    webhook_id: string;
-    loterica_slug: string;
-    enabled: boolean;
-}
+/**
+ * Dispatches webhooks for an event, respecting per-lottery filters.
+ * Auto-disables webhooks after N consecutive failures.
+ */
+export async function notifyAll(event: string, payload: any): Promise<void> {
+    const db = getDb();
+    const lotericaSlug = payload?.loterica || null;
 
-export interface WebhookWithConfig {
-    id: string;
-    url: string;
-    created_at: string;
-    lotericas: {
-        slug: string;
-        nome: string;
-        enabled: boolean;
-    }[];
-}
+    const webhookRows = db.exec(
+        'SELECT id, url, consecutive_failures FROM webhooks WHERE active = 1'
+    );
+    if (!webhookRows.length || !webhookRows[0].values.length) return;
 
-export class WebhookService {
-    private serviceName = 'WebhookService';
+    const promises = webhookRows[0].values.map(async (row: any) => {
+        const [id, url, failures] = row as [string, string, number];
 
-    // Registrar novo webhook
-    async register(url: string): Promise<string> {
-        // Validação robusta de URL
-        try {
-            const urlObj = new URL(url);
-            if (!['http:', 'https:'].includes(urlObj.protocol)) {
-                throw new Error('Protocolo inválido. Use http:// ou https://');
+        // Check lottery filter
+        if (lotericaSlug) {
+            const filterRows = db.exec(
+                'SELECT enabled FROM webhook_lotericas WHERE webhook_id = ? AND loterica_slug = ?',
+                [id, lotericaSlug]
+            );
+            if (filterRows.length && filterRows[0].values.length) {
+                const enabled = filterRows[0].values[0][0] as number;
+                if (!enabled) return; // muted for this lottery
             }
-            // Verificar se não é localhost em produção
-            if (process.env.NODE_ENV === 'production' && ['localhost', '127.0.0.1'].includes(urlObj.hostname)) {
-                throw new Error('URLs localhost não são permitidas em produção');
-            }
-        } catch (error: any) {
-            logger.error(this.serviceName, `URL inválida: ${error.message}`);
-            throw new Error(`URL inválida: ${error.message}`);
         }
-
-        const id = randomUUID();
-        const stmt = db.prepare('INSERT INTO webhooks (id, url) VALUES (?, ?)');
-        stmt.run(id, url);
-
-        logger.success(this.serviceName, `Webhook registrado: ${url}`);
-
-        // Por padrão, ativar todas as lotéricas para este webhook
-        await this.enableAllLotericasForWebhook(id);
-
-        return id;
-    }
-
-    // Listar webhooks
-    list(): any[] {
-        return db.prepare('SELECT * FROM webhooks ORDER BY created_at DESC').all();
-    }
-
-    // Listar webhooks com configuração de lotéricas
-    listWithConfig(): WebhookWithConfig[] {
-        const webhooks = this.list();
-
-        return webhooks.map((webhook: any) => {
-            const lotericas = this.getWebhookLotericas(webhook.id);
-            return {
-                ...webhook,
-                lotericas
-            };
-        });
-    }
-
-    // Remover webhook
-    delete(id: string): void {
-        db.prepare('DELETE FROM webhooks WHERE id = ?').run(id);
-        logger.info(this.serviceName, `Webhook removido: ${id}`);
-    }
-
-    // Obter webhook por ID
-    getById(id: string): any {
-        return db.prepare('SELECT * FROM webhooks WHERE id = ?').get(id);
-    }
-
-    // Ativar todas as lotéricas para um webhook (padrão)
-    private async enableAllLotericasForWebhook(webhookId: string): Promise<void> {
-        const insertStmt = db.prepare('INSERT OR IGNORE INTO webhook_lotericas (id, webhook_id, loterica_slug, enabled) VALUES (?, ?, ?, ?)');
-
-        for (const loteria of LOTERIAS) {
-            insertStmt.run(randomUUID(), webhookId, loteria.slug, 1);
-        }
-
-        logger.info(this.serviceName, `Todas as lotéricas ativadas para webhook: ${webhookId}`);
-    }
-
-    // Configurar lotéricas para um webhook
-    setWebhookLotericas(webhookId: string, lotericaSlugs: string[]): void {
-        // Desativar todas primeiro
-        db.prepare('UPDATE webhook_lotericas SET enabled = 0 WHERE webhook_id = ?').run(webhookId);
-
-        // Ativar apenas as selecionadas
-        const updateStmt = db.prepare('UPDATE webhook_lotericas SET enabled = 1 WHERE webhook_id = ? AND loterica_slug = ?');
-
-        for (const slug of lotericaSlugs) {
-            updateStmt.run(webhookId, slug);
-        }
-
-        logger.info(this.serviceName, `Configuração de lotéricas atualizada para webhook: ${webhookId}`);
-    }
-
-    // Obter lotéricas configuradas para um webhook
-    getWebhookLotericas(webhookId: string): { slug: string; nome: string; enabled: boolean }[] {
-        const query = `
-            SELECT l.slug, l.nome, COALESCE(wl.enabled, 1) as enabled
-            FROM lotericas l
-            LEFT JOIN webhook_lotericas wl ON l.slug = wl.loterica_slug AND wl.webhook_id = ?
-            ORDER BY l.nome
-        `;
-
-        const results = db.prepare(query).all(webhookId) as any[];
-        return results.map(r => ({
-            ...r,
-            enabled: r.enabled === 1 || r.enabled === true
-        }));
-    }
-
-    // Verificar se uma lotérica está habilitada para um webhook
-    isLotericaEnabled(webhookId: string, lotericaSlug: string): boolean {
-        const result = db.prepare(
-            'SELECT enabled FROM webhook_lotericas WHERE webhook_id = ? AND loterica_slug = ?'
-        ).get(webhookId, lotericaSlug) as { enabled: number } | undefined;
-
-        // Se não existir registro, considerar como habilitado (padrão)
-        return result ? result.enabled === 1 : true;
-    }
-
-    // Registrar log de disparo
-    private logWebhookDelivery(
-        webhookId: string,
-        event: string,
-        payload: any,
-        status: 'success' | 'error',
-        statusCode?: number,
-        responseBody?: string,
-        errorMessage?: string
-    ): void {
-        const stmt = db.prepare(`
-            INSERT INTO webhook_logs (id, webhook_id, event, payload, status, status_code, response_body, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        stmt.run(
-            randomUUID(),
-            webhookId,
-            event,
-            JSON.stringify(payload),
-            status,
-            statusCode || null,
-            responseBody || null,
-            errorMessage || null
-        );
-    }
-
-    // Obter histórico de disparos de um webhook
-    getWebhookHistory(webhookId: string, limit: number = 50): WebhookLog[] {
-        return db.prepare(`
-            SELECT * FROM webhook_logs 
-            WHERE webhook_id = ? 
-            ORDER BY created_at DESC 
-            LIMIT ?
-        `).all(webhookId, limit) as WebhookLog[];
-    }
-
-    // Obter histórico completo com paginação
-    getHistory(limit: number = 100, offset: number = 0): WebhookLog[] {
-        return db.prepare(`
-            SELECT wl.*, w.url as webhook_url
-            FROM webhook_logs wl
-            JOIN webhooks w ON wl.webhook_id = w.id
-            ORDER BY wl.created_at DESC
-            LIMIT ? OFFSET ?
-        `).all(limit, offset) as WebhookLog[];
-    }
-
-    // Disparar evento para todos os webhooks
-    async notifyAll(event: string, payload: any): Promise<void> {
-        const webhooks = this.list() as any[];
-        logger.info(this.serviceName, `Disparando evento "${event}" para ${webhooks.length} webhooks`);
-
-        const fullPayload = {
-            event,
-            timestamp: new Date().toISOString(),
-            data: payload
-        };
-
-        const promises = webhooks.map(async (webhook) => {
-            // Verificar se a lotérica está habilitada para este webhook
-            const lotericaSlug = payload.loterica;
-
-            if (lotericaSlug && !this.isLotericaEnabled(webhook.id, lotericaSlug)) {
-                logger.debug(this.serviceName, `Webhook ${webhook.url} ignorado (lotérica ${lotericaSlug} desativada)`);
-                return;
-            }
-
-            try {
-                const response = await axios.post(webhook.url, fullPayload, {
-                    timeout: 10000,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'JogoDoBicho-API/1.0',
-                        'X-Webhook-Event': event
-                    }
-                });
-
-                // Log de sucesso
-                this.logWebhookDelivery(
-                    webhook.id,
-                    event,
-                    fullPayload,
-                    'success',
-                    response.status,
-                    JSON.stringify(response.data)
-                );
-
-                logger.success(this.serviceName, `Webhook enviado com sucesso: ${webhook.url} (HTTP ${response.status})`);
-            } catch (err: any) {
-                const errorMessage = err.message || 'Erro desconhecido';
-                const statusCode = err.response?.status;
-
-                // Log de erro
-                this.logWebhookDelivery(
-                    webhook.id,
-                    event,
-                    fullPayload,
-                    'error',
-                    statusCode,
-                    err.response?.data ? JSON.stringify(err.response.data) : undefined,
-                    errorMessage
-                );
-
-                logger.error(this.serviceName, `Falha no webhook ${webhook.url}: ${errorMessage}${statusCode ? ` (HTTP ${statusCode})` : ''}`);
-            }
-        });
-
-        await Promise.allSettled(promises);
-        logger.info(this.serviceName, `Disparo de webhooks finalizado para evento "${event}"`);
-    }
-
-    // Disparar teste para um webhook específico
-    async testWebhook(id: string): Promise<any> {
-        const webhook = this.getById(id);
-        if (!webhook) throw new Error('Webhook não encontrado');
-
-        const event = 'teste_conexao';
-        const fullPayload = {
-            event,
-            timestamp: new Date().toISOString(),
-            data: {
-                mensagem: "Isso é um teste de funcionamento do webhook.",
-                api_version: "1.0",
-                projeto: "Jogo do Bicho API"
-            }
-        };
 
         try {
-            const response = await axios.post(webhook.url, fullPayload, {
+            const response = await axios.post(url, {
+                event,
+                ...payload,
+                timestamp: new Date().toISOString(),
+            }, {
                 timeout: 10000,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'JogoDoBicho-API/1.0',
-                    'X-Webhook-Event': event
-                }
+                headers: { 'X-Webhook-Event': event, 'Content-Type': 'application/json' },
             });
 
-            this.logWebhookDelivery(
-                webhook.id,
-                event,
-                fullPayload,
-                'success',
-                response.status,
-                JSON.stringify(response.data)
-            );
+            logDelivery(id, event, 'success', response.status, JSON.stringify(response.data)?.slice(0, 500));
 
-            return {
-                status: 'success',
-                http_code: response.status,
-                response: response.data
-            };
+            // Reset failure counter on success
+            if (failures > 0) {
+                db.run('UPDATE webhooks SET consecutive_failures = 0 WHERE id = ?', [id]);
+            }
         } catch (err: any) {
-            const statusCode = err.response?.status;
-            const errorMessage = err.message || 'Erro desconhecido';
+            const statusCode = err.response?.status || null;
+            const errorMsg = err.message || 'Unknown error';
 
-            this.logWebhookDelivery(
-                webhook.id,
-                event,
-                fullPayload,
-                'error',
-                statusCode,
-                err.response?.data ? JSON.stringify(err.response.data) : undefined,
-                errorMessage
-            );
+            logDelivery(id, event, 'error', statusCode, null, errorMsg);
 
-            throw {
-                status: 'error',
-                http_code: statusCode,
-                message: errorMessage
-            };
+            // Increment failures and auto-disable
+            const newFailures = failures + 1;
+            if (newFailures >= MAX_CONSECUTIVE_FAILURES) {
+                db.run('UPDATE webhooks SET active = 0, consecutive_failures = ? WHERE id = ?', [newFailures, id]);
+                log.warn('WEBHOOK', `Auto-desabilitado webhook ${id} após ${newFailures} falhas consecutivas`);
+            } else {
+                db.run('UPDATE webhooks SET consecutive_failures = ? WHERE id = ?', [newFailures, id]);
+            }
         }
-    }
+    });
 
-    // Limpar logs antigos (manter últimos X dias)
-    cleanupOldLogs(daysToKeep: number = 30): void {
-        const stmt = db.prepare(`
-            DELETE FROM webhook_logs 
-            WHERE created_at < datetime('now', '-${daysToKeep} days')
-        `);
-        const result = stmt.run();
-        logger.info(this.serviceName, `Limpeza de logs: ${result.changes} registros removidos`);
+    await Promise.allSettled(promises);
+    saveDatabase();
+}
+
+function logDelivery(webhookId: string, event: string, status: string, statusCode: number | null, responseBody?: string | null, errorMessage?: string): void {
+    const db = getDb();
+    db.run(
+        `INSERT INTO webhook_logs (id, webhook_id, event, status, status_code, response_body, error_message)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [crypto.randomUUID(), webhookId, event, status, statusCode, responseBody || null, errorMessage || null]
+    );
+}
+
+// ============ CRUD ============
+
+export function getWebhooks(): any[] {
+    const db = getDb();
+    const rows = db.exec(
+        'SELECT id, url, active, consecutive_failures, created_at FROM webhooks ORDER BY created_at DESC'
+    );
+    if (!rows.length) return [];
+
+    return rows[0].values.map((r: any) => {
+        const id = r[0] as string;
+        const lotRows = db.exec(
+            'SELECT loterica_slug, enabled FROM webhook_lotericas WHERE webhook_id = ?', [id]
+        );
+        const lotericas = lotRows.length ? lotRows[0].values.map((l: any) => ({
+            loterica_slug: l[0], enabled: l[1]
+        })) : [];
+
+        return {
+            id: r[0], url: r[1], active: r[2], consecutive_failures: r[3],
+            created_at: r[4], lotericas
+        };
+    });
+}
+
+export function createWebhook(url: string): string {
+    const db = getDb();
+    const id = crypto.randomUUID();
+    db.run('INSERT INTO webhooks (id, url) VALUES (?, ?)', [id, url]);
+    saveDatabase();
+    return id;
+}
+
+export function deleteWebhook(id: string): void {
+    const db = getDb();
+    db.run('DELETE FROM webhooks WHERE id = ?', [id]);
+    saveDatabase();
+}
+
+export function toggleWebhookLoterica(webhookId: string, lotericaSlug: string, enabled: boolean): void {
+    const db = getDb();
+    db.run(
+        `INSERT INTO webhook_lotericas (id, webhook_id, loterica_slug, enabled)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(webhook_id, loterica_slug) DO UPDATE SET enabled = ?`,
+        [crypto.randomUUID(), webhookId, lotericaSlug, enabled ? 1 : 0, enabled ? 1 : 0]
+    );
+    saveDatabase();
+}
+
+export function reactivateWebhook(id: string): void {
+    const db = getDb();
+    db.run('UPDATE webhooks SET active = 1, consecutive_failures = 0 WHERE id = ?', [id]);
+    saveDatabase();
+}
+
+export function getWebhookLogs(webhookId: string, limit: number = 50): any[] {
+    const db = getDb();
+    const rows = db.exec(
+        'SELECT id, event, status, status_code, response_body, error_message, created_at FROM webhook_logs WHERE webhook_id = ? ORDER BY created_at DESC LIMIT ?',
+        [webhookId, limit]
+    );
+    if (!rows.length) return [];
+    return rows[0].values.map((r: any) => ({
+        id: r[0], event: r[1], status: r[2], status_code: r[3],
+        response_body: r[4], error_message: r[5], created_at: r[6]
+    }));
+}
+
+/**
+ * Sends a test webhook (fake "connectivity test" event).
+ */
+export async function testWebhook(id: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {
+    const db = getDb();
+    const rows = db.exec('SELECT url FROM webhooks WHERE id = ?', [id]);
+    if (!rows.length || !rows[0].values.length) return { success: false, error: 'Webhook not found' };
+
+    const url = rows[0].values[0][0] as string;
+    try {
+        const res = await axios.post(url, {
+            event: 'test.conectividade',
+            message: 'Teste de conectividade do Amigos do Bicho',
+            timestamp: new Date().toISOString(),
+        }, {
+            timeout: 10000,
+            headers: { 'X-Webhook-Event': 'test.conectividade' },
+        });
+        logDelivery(id, 'test.conectividade', 'success', res.status, 'Test OK');
+        saveDatabase();
+        return { success: true, statusCode: res.status };
+    } catch (err: any) {
+        const code = err.response?.status;
+        logDelivery(id, 'test.conectividade', 'error', code, null, err.message);
+        saveDatabase();
+        return { success: false, statusCode: code, error: err.message };
     }
 }

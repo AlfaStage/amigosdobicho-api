@@ -1,194 +1,266 @@
-import { FastifyInstance } from 'fastify';
-import { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
-import { RenderService } from '../services/RenderService.js';
-import { scrapingStatusService } from '../services/ScrapingStatusService.js';
-import { logger } from '../utils/logger.js';
-import path from 'path';
-import fs from 'fs';
+import { type FastifyInstance } from 'fastify';
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { getDb, saveDatabase } from '../database/schema.js';
+import { getWebhooks, createWebhook, deleteWebhook, testWebhook, toggleWebhookLoterica, reactivateWebhook, getWebhookLogs } from '../services/WebhookService.js';
+import { getAllProxies, addManualProxy, deleteProxy, runProxySweep } from '../services/ProxyService.js';
+import { todayStr } from '../utils/helpers.js';
 
-export async function adminRoutes(app: FastifyInstance) {
-    const server = app.withTypeProvider<ZodTypeProvider>();
-    const renderService = new RenderService();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const TEMPLATES_DIR = join(__dirname, '..', '..', '.explicações');
 
-    // Página inicial redireciona para status
-    server.get('/', async (req, reply) => {
-        const queryString = new URL(req.url, 'http://localhost').search;
-        return reply.redirect(`/admin/status${queryString}`);
-    });
+const API_KEY = process.env.API_KEY || 'amigos-do-bicho-secret-key';
 
-    // Helper para servir arquivos do build do Vite
-    const serveAdminPage = (pagePath: string, reply: any) => {
-        try {
-            const fullPath = path.resolve('dist-admin/src/admin/pages', pagePath, 'index.html');
-            const html = fs.readFileSync(fullPath, 'utf-8');
-            reply.header('Content-Type', 'text/html');
-            return reply.send(html);
-        } catch (error) {
-            logger.error('Admin', `Erro ao carregar página ${pagePath}:`, error);
-            return reply.status(500).send({ error: 'Erro ao carregar recurso do admin' });
-        }
-    };
+const TEMPLATE_FILE_MAP: Record<string, string> = {
+    resultado: 'resultados_exemplo.html',
+    palpite: 'palpites_exemplo.html',
+    premiado_unitario: 'palpite_premiado_exemplo.html',
+    premiado_dia: 'palpite_premiado_dia_exemplo.html',
+    cotacao: 'cotação_exemplo.html',
+};
 
-    server.get('/status', async (req, reply) => serveAdminPage('status', reply));
-    server.get('/webhooks', async (req, reply) => serveAdminPage('webhooks', reply));
-    server.get('/proxies', async (req, reply) => serveAdminPage('proxies', reply));
-    server.get('/template', async (req, reply) => serveAdminPage('template', reply));
-    server.get('/cotacoes', async (req, reply) => serveAdminPage('cotacoes', reply));
-
-    // API: Obter Template Atual
-    server.get('/api/template', {
-        schema: {
-            summary: 'Obter Template Atual',
-            description: `
-Retorna o template HTML atual usado para geração de imagens dos resultados.
-
-### Exemplo de Requisição:
-\`\`\`bash
-curl -X GET "http://localhost:3002/admin/api/template"
-\`\`\`
-
-### Exemplo de Resposta (200 OK):
-\`\`\`json
-{
-  "html": "<!DOCTYPE html>...<html>...</html>"
+function authHook(req: any, reply: any, done: any) {
+    const key = req.headers['x-api-key'];
+    if (key !== API_KEY) {
+        reply.code(401).send({ error: 'Unauthorized: Invalid API key' });
+        return;
+    }
+    done();
 }
-\`\`\`
-            `,
-            tags: ['⚙️ Admin'],
-            response: {
-                200: z.object({
-                    html: z.string().describe('Template HTML completo')
-                })
-            }
-        }
+
+export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
+
+    // ==================== STATUS ====================
+    app.get('/api/status/hoje', {
+        preHandler: authHook,
+        schema: { tags: ['Admin'], summary: 'Status geral de hoje' }
     }, async () => {
-        return { html: await renderService.getTemplate() };
+        const db = getDb();
+        const today = todayStr();
+
+        const totalRows = db.exec("SELECT COUNT(*) FROM scraping_status WHERE data = ?", [today]);
+        const successRows = db.exec("SELECT COUNT(*) FROM scraping_status WHERE data = ? AND status = 'success'", [today]);
+        const errorRows = db.exec("SELECT COUNT(*) FROM scraping_status WHERE data = ? AND status IN ('error', 'retrying')", [today]);
+
+        const total = totalRows[0]?.values[0]?.[0] as number || 0;
+        const sucesso = successRows[0]?.values[0]?.[0] as number || 0;
+        const erro = errorRows[0]?.values[0]?.[0] as number || 0;
+        const taxa = total > 0 ? Math.round((sucesso / total) * 100) : 0;
+
+        return { data: today, total_dia: total, sucesso, erro, taxa_sucesso: taxa };
     });
 
-    // API: Salvar Template
-    server.post('/api/template', {
-        schema: {
-            summary: 'Salvar Template',
-            description: `
-Salva um novo template HTML para geração de imagens.
+    app.get('/api/status/painel', {
+        preHandler: authHook,
+        schema: { tags: ['Admin'], summary: 'Painel detalhado de scraping' }
+    }, async () => {
+        const db = getDb();
+        const today = todayStr();
+        const rows = db.exec(`
+      SELECT loterica_slug, horario, status, tentativas, ultimo_erro
+      FROM scraping_status WHERE data = ?
+      ORDER BY loterica_slug, horario
+    `, [today]);
 
-### Exemplo de Requisição:
-\`\`\`bash
-curl -X POST "http://localhost:3002/admin/api/template" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "html": "<!DOCTYPE html><html>...</html>"
-  }'
-\`\`\`
+        if (!rows.length) return [];
+        return rows[0].values.map((r: any) => ({
+            loterica_slug: r[0], horario: r[1], status: r[2], tentativas: r[3], ultimo_erro: r[4]
+        }));
+    });
 
-### Exemplo de Resposta (200 OK):
-\`\`\`json
-{
-  "message": "Template salvo com sucesso!"
-}
-\`\`\`
-            `,
-            tags: ['⚙️ Admin'],
-            body: z.object({
-                html: z.string().describe('HTML do template completo')
-            }),
-            response: {
-                200: z.object({
-                    message: z.string()
-                })
+    // ==================== WEBHOOKS ====================
+    app.get('/v1/webhooks', {
+        preHandler: authHook,
+        schema: { tags: ['Webhooks'], summary: 'Listar webhooks' }
+    }, async () => getWebhooks());
+
+    app.post('/v1/webhooks', {
+        preHandler: authHook,
+        schema: { tags: ['Webhooks'], summary: 'Criar novo webhook', body: { type: 'object', properties: { url: { type: 'string' } } } }
+    }, async (req) => {
+        const { url } = req.body as any;
+        if (!url) return { error: 'URL is required' };
+        const id = createWebhook(url);
+        return { id, url };
+    });
+
+    app.delete('/v1/webhooks/:id', {
+        preHandler: authHook,
+        schema: { tags: ['Webhooks'], summary: 'Deletar webhook', params: { type: 'object', properties: { id: { type: 'string' } } } }
+    }, async (req) => {
+        const { id } = req.params as any;
+        deleteWebhook(id);
+        return { deleted: true };
+    });
+
+    app.post('/v1/webhooks/:id/test', {
+        preHandler: authHook,
+        schema: { tags: ['Webhooks'], summary: 'Testar envio de webhook' }
+    }, async (req) => {
+        const { id } = req.params as any;
+        return testWebhook(id);
+    });
+
+    app.get('/v1/webhooks/:id/historico', {
+        preHandler: authHook,
+        schema: { tags: ['Webhooks'], summary: 'Ver histórico de envios do webhook' }
+    }, async (req) => {
+        const { id } = req.params as any;
+        return getWebhookLogs(id);
+    });
+
+    app.put('/v1/webhooks/:id/lotericas', {
+        preHandler: authHook,
+        schema: { tags: ['Webhooks'], summary: 'Habilitar/Desabilitar lotéricas no webhook' }
+    }, async (req) => {
+        const { id } = req.params as any;
+        const { lotericas } = req.body as any;
+        if (!Array.isArray(lotericas)) return { error: 'lotericas array required' };
+        for (const l of lotericas) {
+            toggleWebhookLoterica(id, l.slug, l.enabled);
+        }
+        return { updated: true };
+    });
+
+    app.post('/v1/webhooks/:id/reactivate', {
+        preHandler: authHook,
+        schema: { tags: ['Webhooks'], summary: 'Reativar webhook desativado por erros' }
+    }, async (req) => {
+        const { id } = req.params as any;
+        reactivateWebhook(id);
+        return { reactivated: true };
+    });
+
+    // ==================== PROXIES ====================
+    app.get('/api/proxies', {
+        preHandler: authHook,
+        schema: { tags: ['Proxies'], summary: 'Listar proxies cadastrados' }
+    }, async () => getAllProxies());
+
+    app.post('/api/proxies', {
+        preHandler: authHook,
+        schema: { tags: ['Proxies'], summary: 'Adicionar proxy manual' }
+    }, async (req) => {
+        const { host, port, protocol } = req.body as any;
+        if (!host || !port || !protocol) return { error: 'host, port, protocol required' };
+        const ok = addManualProxy(host, port, protocol);
+        return { added: ok };
+    });
+
+    app.delete('/api/proxies/:id', {
+        preHandler: authHook,
+        schema: { tags: ['Proxies'], summary: 'Remover proxy' }
+    }, async (req) => {
+        const { id } = req.params as any;
+        deleteProxy(id);
+        return { deleted: true };
+    });
+
+    app.post('/api/proxies/sweep', {
+        preHandler: authHook,
+        schema: { tags: ['Proxies'], summary: 'Forçar varredura e teste de novos proxies' }
+    }, async () => {
+        return runProxySweep();
+    });
+
+    // ==================== TEMPLATES ====================
+
+    // Serve base HTML template from .explicações/ examples
+    app.get('/admin/api/template-base/:type', {
+        schema: { tags: ['Admin'], summary: 'Obter conteúdo original dos arquivos .explicações' }
+    }, async (req, reply) => {
+        const { type } = req.params as any;
+        const filename = TEMPLATE_FILE_MAP[type];
+        if (!filename) return reply.code(404).send({ error: 'Template type not found' });
+
+        const filePath = join(TEMPLATES_DIR, filename);
+        if (!existsSync(filePath)) return reply.code(404).send({ error: 'Template file not found' });
+
+        const html = readFileSync(filePath, 'utf-8');
+        return { type, filename, html_content: html };
+    });
+
+    // Get saved template config from DB (or fallback to base file)
+    app.get('/admin/api/template', {
+        preHandler: authHook,
+        schema: { tags: ['Admin'], summary: 'Recuperar configuração salva de um template' }
+    }, async (req) => {
+        const { type } = req.query as any;
+        const db = getDb();
+        const rows = db.exec('SELECT id, type, name, html_content, css_content, width, height FROM templates WHERE type = ?', [type]);
+
+        if (rows.length && rows[0].values.length) {
+            const r = rows[0].values[0];
+            return { id: r[0], type: r[1], name: r[2], html_content: r[3], css_content: r[4], width: r[5], height: r[6] };
+        }
+
+        // Fallback: load from base file
+        const filename = TEMPLATE_FILE_MAP[type];
+        if (filename) {
+            const filePath = join(TEMPLATES_DIR, filename);
+            if (existsSync(filePath)) {
+                return { type, name: type, html_content: readFileSync(filePath, 'utf-8'), width: 700 };
             }
         }
-    }, async (req, reply) => {
-        const { html } = req.body;
-        await renderService.saveTemplate(html);
-        return reply.send({ message: 'Template salvo com sucesso!' });
+        return { type, name: type, html_content: '', width: 700 };
     });
 
-    // API: Preview Template (Renderiza imagem temporária)
-    server.post('/api/preview', {
-        schema: {
-            summary: 'Preview do Template',
-            description: `
-Gera um preview da imagem usando um template HTML personalizado com dados mockados.
+    app.post('/admin/api/template', {
+        preHandler: authHook,
+        schema: { tags: ['Admin'], summary: 'Salvar alterações de design em um template' }
+    }, async (req) => {
+        const { type, name, html_content, css_content, width, height } = req.body as any;
+        const db = getDb();
+        db.run(
+            `INSERT INTO templates (id, type, name, html_content, css_content, width, height, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(type) DO UPDATE SET name = ?, html_content = ?, css_content = ?, width = ?, height = ?, updated_at = datetime('now')`,
+            [crypto.randomUUID(), type, name, html_content, css_content || '', width || 700, height || null,
+                name, html_content, css_content || '', width || 700, height || null]
+        );
+        saveDatabase();
+        return { saved: true };
+    });
 
-Útil para testar templates antes de salvá-los definitivamente.
-
-### Exemplo de Requisição:
-\`\`\`bash
-curl -X POST "http://localhost:3002/admin/api/preview" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "html": "<!DOCTYPE html><html>...</html>"
-  }' \\
-  --output preview.png
-\`\`\`
-
-### Exemplo de Resposta (200 OK):
-\`\`\`json
-{
-  "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA...",
-  "html": "<!DOCTYPE html>..."
-}
-\`\`\`
-            `,
-            tags: ['⚙️ Admin'],
-            body: z.object({
-                html: z.string().describe('HTML do template para preview')
-            }),
-            response: {
-                200: z.object({
-                    image: z.string().describe('Imagem em base64 (data URI)'),
-                    html: z.string().describe('HTML renderizado')
-                }),
-                500: z.object({
-                    message: z.string(),
-                    error: z.string(),
-                    stack: z.string()
-                }).describe('Erro ao gerar preview')
-            }
-        }
+    // Preview: render HTML as iframe-ready content
+    app.post('/admin/api/preview-html', {
+        schema: { tags: ['Admin'], summary: 'Prévia de HTML para iframe' }
     }, async (req, reply) => {
-        const { html } = req.body;
+        const { html } = req.body as any;
+        if (!html) return reply.code(400).send({ error: 'html body required' });
+        const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{width:700px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}</style></head><body>${html}</body></html>`;
+        reply.type('text/html').send(fullHtml);
+    });
 
-        // Mock de dados para preview
-        const mockResultado = {
-            data: '2026-02-04',
-            horario: '16:20',
-            loterica: 'LOOK Goiás (Preview)',
-            premios: [
-                { posicao: 1, milhar: '1234', grupo: 9, bicho: 'Cobra' },
-                { posicao: 2, milhar: '5678', grupo: 20, bicho: 'Peru' },
-                { posicao: 3, milhar: '9012', grupo: 3, bicho: 'Burro' },
-                { posicao: 4, milhar: '3456', grupo: 14, bicho: 'Gato' },
-                { posicao: 5, milhar: '7890', grupo: 23, bicho: 'Urso' },
-                { posicao: 6, milhar: '1122', grupo: 6, bicho: 'Cabra' },
-                { posicao: 7, milhar: '334', grupo: 9, bicho: 'Cobra' },
-            ]
-        };
+    // Preview: render HTML as PNG image
+    app.post('/admin/api/preview-image', {
+        preHandler: authHook,
+        schema: { tags: ['Admin'], summary: 'Prévia de HTML renderizado como PNG' }
+    }, async (req, reply) => {
+        const { html } = req.body as any;
+        if (!html) return reply.code(400).send({ error: 'html body required' });
 
-        try {
-            logger.info('Preview', 'Recebendo HTML:', html?.substring(0, 50) + '...');
+        const puppeteer = (await import('puppeteer')).default;
+        const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const page = await browser.newPage();
+        await page.setViewport({ width: 700, height: 100 });
 
-            // Garantir que fontes estão carregadas
-            await renderService.initFonts();
+        const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{width:700px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}</style></head><body>${html}</body></html>`;
+        await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
 
-            const buffer = await renderService.renderImage(mockResultado, html);
-            const htmlRendered = await renderService.renderHtml(mockResultado, html);
+        const height = await page.evaluate(() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+        await page.setViewport({ width: 700, height });
 
-            logger.success('Preview', 'Sucesso. Tamanho do Buffer:', buffer.length);
+        const screenshot = await page.screenshot({ type: 'png', fullPage: true });
+        await page.close();
+        await browser.close();
 
-            return {
-                image: `data:image/png;base64,${buffer.toString('base64')}`,
-                html: htmlRendered
-            };
-        } catch (error: any) {
-            logger.error('Preview', 'Erro detalhado:', error);
-            return reply.status(500).send({
-                message: "Erro ao gerar preview",
-                error: error.message,
-                stack: error.stack
-            });
-        }
+        const base64 = Buffer.from(screenshot).toString('base64');
+        return { image: `data:image/png;base64,${base64}` };
     });
 }
+
+
+

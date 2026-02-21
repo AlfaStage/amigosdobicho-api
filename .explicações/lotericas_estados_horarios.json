@@ -1,0 +1,295 @@
+{
+  "LBR": {
+    "DF": {
+      "10:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "12:40:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "15:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "17:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "19:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quinta",
+        "Sexta",
+        "Domingo"
+      ]
+    }
+  },
+  "BA": {
+    "BA": {
+      "10:20:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "12:20:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "15:20:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "19:20:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quinta",
+        "Sexta"
+      ]
+    }
+  },
+  "ALVORADA": {
+    "MG": {
+      "12:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado"
+      ]
+    }
+  },
+  "MINAS DIA": {
+    "MG": {
+      "15:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado"
+      ]
+    }
+  },
+  "MINAS NOITE": {
+    "MG": {
+      "19:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quinta",
+        "Sexta"
+      ]
+    }
+  },
+  "LOTEP": {
+    "PB": {
+      "10:45:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "12:45:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "15:45:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "18:00:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado"
+      ]
+    }
+  },
+  "PT": {
+    "RJ": {
+      "14:20:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ],
+      "16:00:00": [
+        "Quarta",
+        "S├íbado"
+      ]
+    }
+  },
+  "PTN": {
+    "RJ": {
+      "18:20:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quinta",
+        "Sexta"
+      ]
+    }
+  },
+  "BANDEIRANTES": {
+    "SP": {
+      "15:30:00": [
+        "Segunda",
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo"
+      ]
+    }
+  },
+  "LOOK": {
+    "GO": {
+      "11:20:00": [
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo",
+        "Segunda"
+      ],
+      "14:20:00": [
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo",
+        "Segunda"
+      ],
+      "16:20:00": [
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo",
+        "Segunda"
+      ],
+      "18:20:00": [
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo",
+        "Segunda"
+      ]
+    }
+  },
+  "PTM": {
+    "RJ": {
+      "11:20:00": [
+        "Ter├ºa",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "S├íbado",
+        "Domingo",
+        "Segunda"
+      ]
+    }
+  },
+  "FEDERAL": {
+    "DF": {
+      "20:00:00": [
+        "Quarta",
+        "S├íbado"
+      ]
+    },
+    "BA": {
+      "20:00:00": [
+        "Quarta"
+      ]
+    },
+    "GO": {
+      "20:00:00": [
+        "Quarta",
+        "S├íbado"
+      ]
+    },
+    "MG": {
+      "20:00:00": [
+        "Quarta",
+        "S├íbado"
+      ]
+    },
+    "PB": {
+      "20:00:00": [
+        "Quarta",
+        "S├íbado"
+      ]
+    },
+    "RJ": {
+      "20:00:00": [
+        "Quarta",
+        "S├íbado"
+      ]
+    },
+    "SP": {
+      "20:00:00": [
+        "Quarta",
+        "S├íbado"
+      ]
+    }
+  }
+}

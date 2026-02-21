@@ -1,64 +1,68 @@
-# Stage 1: Build
-FROM node:20-alpine AS builder
+# ─────────────────────────────────────────
+# Stage 1: Build TypeScript
+# ─────────────────────────────────────────
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Instalar dependências de build necessárias para better-sqlite3
-RUN apk add --no-cache python3 make g++
+# Copy package files first (for better Docker cache)
+COPY package.json package-lock.json* ./
+RUN npm ci --ignore-scripts
 
-COPY package*.json ./
-RUN npm install
+# Copy source code
+COPY tsconfig.json ./
+COPY src/ ./src/
 
-COPY . .
-RUN npm run build
+# Build TypeScript → dist/
+RUN npx tsc
 
-# Stage 2: Production
-FROM node:20-alpine
+# ─────────────────────────────────────────
+# Stage 2: Production runtime
+# ─────────────────────────────────────────
+FROM node:20-slim
 
-WORKDIR /app
-
-# Instalar bibliotecas de runtime necessárias
-RUN apk add --no-cache \
-    libstdc++ \
-    gcompat \
+# Install Chromium for Puppeteer
+RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Configurar Puppeteer para usar o Chromium do sistema
+# Configure Puppeteer to use system Chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-
-# Instalar dependências de produção apenas
-COPY package*.json ./
-RUN npm install --production
-
-# Copiar build e arquivos de dados/assets
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/src/data ./src/data
-COPY --from=builder /app/src/assets ./src/assets
-COPY --from=builder /app/src/templates ./src/templates
-COPY --from=builder /app/public ./public
-
-# Criar diretório de dados persistentes
-RUN mkdir -p /app/data
-
-# Volume para persistência do banco de dados
-VOLUME ["/app/data"]
-
-# Expor porta da API
-EXPOSE 3002
-
-# Variáveis de ambiente default
-ENV PORT=3002
 ENV NODE_ENV=production
-ENV DATABASE_PATH=/app/data/database.db
-ENV TEMPLATE_PATH=/app/data/custom-template.html
 
-# Comando de entrada
-CMD ["sh", "-c", "node dist/init-db.js && node dist/server.js"]
+WORKDIR /app
 
+# Copy package files and install production deps only
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --ignore-scripts
 
+# Copy built output from builder
+COPY --from=builder /app/dist/ ./dist/
+
+# Copy admin frontend
+COPY admin/dist/ ./admin/dist/
+
+# Copy template example files (needed for template base HTML loading)
+COPY .explicações/ ./.explicações/
+
+# Expose port (default 3000, configurable via PORT env)
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD node -e "fetch('http://localhost:3000/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+
+# Start the application
+CMD ["node", "dist/index.js"]

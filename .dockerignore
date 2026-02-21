@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.git/
+.gitignore
+.env
+.env.*
+.agent/
+.gemini/
+*.sqlite
+data/
+*.md
+!README.md
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
