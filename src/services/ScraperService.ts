@@ -146,17 +146,26 @@ export async function fetchPalpites(): Promise<{
         }
 
         log.info('SCRAPER', `Navegando para ${PALPITES_URL}...`);
-        await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 45000 });
+        let html = '';
+        let needsFallback = false;
 
-        // Wait a bit more for dynamic content
-        await new Promise(r => setTimeout(r, 5000));
+        try {
+            await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 35000 });
+            // Wait a bit more for dynamic content
+            await new Promise(r => setTimeout(r, 5000));
+            html = await page.content();
 
-        let html = await page.content();
+            if (html.includes('Checking your browser') || html.length < 5000 || html.includes('Acesso bloqueado') || html.includes('gocache-error-page') || html.toLowerCase().includes('forbidden')) {
+                log.warn('SCRAPER', 'Conteúdo detectado como bloqueio (GoCache/Cloudflare/Forbidden).');
+                needsFallback = true;
+            }
+        } catch (err) {
+            log.warn('SCRAPER', 'Navegação direta falhou ou deu timeout. Tentando fallback via Google...');
+            needsFallback = true;
+        }
 
-        // Se pegou Cloudflare ou conteúdo restrito, tenta Fallback via Google
-        if (html.includes('Checking your browser') || html.length < 5000 || html.includes('Acesso bloqueado') || html.includes('gocache-error-page') || html.toLowerCase().includes('forbidden')) {
-            log.warn('SCRAPER', 'Acesso direto bloqueado (GoCache/Cloudflare/Forbidden). Tentando fallback via Google Search...');
-
+        // Tenta Fallback via Google se necessário
+        if (needsFallback) {
             try {
                 // Navigate to Google
                 await page.goto('https://www.google.com/search?q=resultado+facil+palpites+do+dia+hoje', { waitUntil: 'networkidle2' });
