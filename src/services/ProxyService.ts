@@ -236,7 +236,7 @@ export async function processBulkProxies(text: string): Promise<{ totalFound: nu
                          VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, 100, ?, datetime('now'))
                          ON CONFLICT(host, port) DO UPDATE SET 
                             alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), username = ?, password = ?, source = 'manual'`,
-                        [crypto.randomUUID(), p.host, p.port, p.protocol, p.username, p.password, result.latency, result.latency, p.username, p.password]
+                        [crypto.randomUUID(), p.host, p.port, p.protocol, p.username || null, p.password || null, result.latency, result.latency, p.username || null, p.password || null]
                     );
                     added++;
                 } catch { /* ignorar erro de parse sql */ }

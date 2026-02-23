@@ -67,13 +67,13 @@ async function adaptivePoller(): Promise<void> {
         for (const r of results) {
             processados++;
 
-            let nomeOriginal = r.lottery || r.name || 'Desconhecida';
-            nomeOriginal = nomeOriginal.replace(/\b(nova|novo|loteria|da|de|do|dos|das|extração|extracao)\b/gi, '').replace(/\s+/g, ' ').trim();
+            const rawTitle = r.title || r.lottery || r.name || 'Desconhecida';
+            let nomeLimpo = rawTitle.replace(/\b(nova|novo|loteria|da|de|do|dos|das|extração|extracao)\b/gi, '').replace(/\s+/g, ' ').trim();
             const estado = r.state || r.estado || 'BR';
 
             // 1. Descobre ou carrega a Lotérica do Banco
-            const lotSlug = mapLotteryToSlug(nomeOriginal, estado);
-            const loterica = learnOrGetLoterica(nomeOriginal, estado, lotSlug);
+            const lotSlug = mapLotteryToSlug(nomeLimpo, estado);
+            const loterica = learnOrGetLoterica(nomeLimpo, estado, lotSlug);
 
             const apiTime = r.time ? r.time.split(':').slice(0, 2).map((v: string) => v.padStart(2, '0')).join(':') : null;
             if (!apiTime) continue;
@@ -93,7 +93,7 @@ async function adaptivePoller(): Promise<void> {
                 estado,
                 data: today,
                 horario: normalizedTime,
-                nome_original: nomeOriginal,
+                nome_original: rawTitle,
                 premios,
             };
 
@@ -115,8 +115,19 @@ async function adaptivePoller(): Promise<void> {
 
                 log.success('SCRAPER', `Novo Resultado Processado: ${lotSlug} ${normalizedTime}`, { id: result.id });
 
+                const host = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
                 await notifyAll('resultado.novo', {
-                    loterica: lotSlug, data: today, horario: normalizedTime, resultado_id: result.id
+                    loterica: lotSlug,
+                    banca: rawTitle,
+                    data: today,
+                    horario: normalizedTime,
+                    resultado_id: result.id,
+                    html_url: `${host}/v1/resultados/${result.id}/html`,
+                    image_url: `${host}/v1/resultados/${result.id}/image`,
+                    detalhes: {
+                        ...result.resultDetails,
+                        banca: rawTitle
+                    }
                 }).catch(() => { });
             }
         }

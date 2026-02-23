@@ -9,6 +9,19 @@
 </head>
 
 <body>
+    <!-- AUTH MODAL -->
+    <div id="auth-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <h3 class="modal-title">🔒 Acesso Restrito</h3>
+            <p class="modal-desc">Digite a API KEY do servidor para
+                continuar.</p>
+            <input type="password" id="auth-api-key-input" placeholder="Sua API KEY" class="input-full modal-input"
+                onkeypress="if(event.key === 'Enter') submitAuth()">
+            <button class="btn btn-primary modal-btn" onclick="submitAuth()">Entrar
+                no Admin</button>
+        </div>
+    </div>
+
     <nav class="nav">
         <span class="nav-brand">🎲 Amigos do Bicho</span>
         <span class="nav-link active" data-page="status">📊 Status</span>
@@ -155,18 +168,35 @@ http://192.168.0.1:3128"
 
     <script>
         let API_KEY = localStorage.getItem('adb_api_key');
-        if (!API_KEY) {
-            API_KEY = prompt('🔒 Acesso Restrito\nDigite a API KEY do servidor:');
-            if (API_KEY) localStorage.setItem('adb_api_key', API_KEY);
+        let headers = { 'x-api-key': API_KEY || '', 'Content-Type': 'application/json' };
+
+        function showAuthModal() {
+            document.getElementById('auth-modal').classList.remove('hidden');
+            document.getElementById('auth-api-key-input').focus();
         }
-        const headers = { 'x-api-key': API_KEY || '', 'Content-Type': 'application/json' };
+
+        function hideAuthModal() {
+            document.getElementById('auth-modal').classList.add('hidden');
+        }
+
+        function submitAuth() {
+            const inputVal = document.getElementById('auth-api-key-input').value.trim();
+            if (inputVal) {
+                API_KEY = inputVal;
+                localStorage.setItem('adb_api_key', API_KEY);
+                headers['x-api-key'] = API_KEY;
+                hideAuthModal();
+                initAdmin(); // Inicializa dados após o login
+            }
+        }
 
         // Intercepta 401 Unauthorized para pedir a senha denovo
         function checkAuth(res) {
             if (res.status === 401) {
                 localStorage.removeItem('adb_api_key');
-                alert('API KEY Inválida ou Expirada! A página será atualizada.');
-                location.reload();
+                alert('API KEY Inválida ou Expirada! Por favor, insira novamente.');
+                showAuthModal();
+                throw new Error("Unauthorized");
             }
             return res;
         }
@@ -380,8 +410,18 @@ http://192.168.0.1:3128"
         }
 
         // ========== INIT ==========
-        loadStatus();
-        setInterval(loadStatus, 30000);
+        function initAdmin() {
+            loadStatus();
+            if (!window.statusInterval) {
+                window.statusInterval = setInterval(loadStatus, 30000);
+            }
+        }
+
+        if (!API_KEY) {
+            showAuthModal();
+        } else {
+            initAdmin();
+        }
     </script>
 </body>
 

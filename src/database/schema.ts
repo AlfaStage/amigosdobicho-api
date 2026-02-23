@@ -1,19 +1,26 @@
-// @ts-ignore
 import initSqlJs, { type Database } from 'sql.js';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { Buffer } from 'buffer';
 import crypto from 'crypto';
 import { log } from '../utils/Logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const DB_PATH = join(__dirname, '..', '..', 'db.sqlite');
+// Save database in the 'data' directory for Docker volume persistence
+const DATA_DIR = join(__dirname, '..', '..', 'data');
+const DB_PATH = join(DATA_DIR, 'db.sqlite');
 
 let db: Database;
 
 export async function initDatabase(): Promise<Database> {
   const SQL = await initSqlJs();
+
+  // Ensure 'data' directory exists for persistence
+  if (!existsSync(DATA_DIR)) {
+    mkdirSync(DATA_DIR, { recursive: true });
+  }
 
   if (existsSync(DB_PATH)) {
     const buffer = readFileSync(DB_PATH);

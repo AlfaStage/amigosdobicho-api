@@ -60,6 +60,9 @@ COPY .explicações/ ./.explicações/
 # Expose port (default 3000, configurable via PORT env)
 EXPOSE 3000
 
+# Mount data volume for SQLite persistence
+VOLUME ["/app/data"]
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD node -e "const port = process.env.PORT || 3000; fetch('http://localhost:' + port + '/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"

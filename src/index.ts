@@ -102,6 +102,8 @@ async function main() {
     });
     await app.register(fastifySwaggerUi, {
         routePrefix: '/docs',
+        staticCSP: false,
+        transformStaticCSP: (header) => header,
         uiConfig: { docExpansion: 'list', deepLinking: true, tryItOutEnabled: true },
     });
 

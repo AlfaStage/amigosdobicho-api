@@ -24,7 +24,7 @@ export interface ResultadoInput {
  * Handles slug mapping, uniqueness checks, atomic transactions,
  * and post-commit hooks (webhooks + premiados check).
  */
-export function ingestResult(input: ResultadoInput): { saved: boolean; id?: string } {
+export function ingestResult(input: ResultadoInput): { saved: boolean; id?: string; resultDetails?: any } {
     const db = getDb();
     const slug = mapLotteryToSlug(input.loterica, input.estado);
 
@@ -72,13 +72,29 @@ export function ingestResult(input: ResultadoInput): { saved: boolean; id?: stri
         stmtPremio.free();
         db.run('COMMIT');
 
+        // Prepare the full result to return
+        const fullResult = {
+            id: resultadoId,
+            loterica_slug: slug,
+            estado: input.estado || 'BR',
+            data: input.data,
+            horario: normalizedTime,
+            nome_original: nomeVal,
+            premios: input.premios.map(p => ({
+                posicao: p.posicao,
+                milhar: p.milhar,
+                grupo: calcularGrupo(p.milhar),
+                bicho: calcularBicho(p.milhar)
+            }))
+        };
+
         saveDatabase();
         log.success('DB', `Resultado salvo: ${slug} ${input.data} ${input.horario}`, { premios: input.premios.length });
 
         // Post-commit: check palpites premiados for ALL results of the day (retroactive scan)
         checkPalpitesPremiados(input.data, input.disableWebhooks);
 
-        return { saved: true, id: resultadoId };
+        return { saved: true, id: resultadoId, resultDetails: fullResult };
     } catch (err) {
         db.run('ROLLBACK');
         log.error('DB', `Transação falhou para ${slug}`, err);
@@ -162,6 +178,7 @@ function insertPremiado(palpiteId: string, tipo: string, numero: string, extraca
 
         // Dispatch individual Webhook for this specific hit if allowed
         if (!disableWebhooks) {
+            const host = process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
             notifyAll('palpite.premiado', {
                 id,
                 palpite_id: palpiteId,
@@ -170,7 +187,9 @@ function insertPremiado(palpiteId: string, tipo: string, numero: string, extraca
                 extracao,
                 premio,
                 data,
-                loterica: slug
+                loterica: slug,
+                html_url: `${host}/v1/premiados/${id}/html`,
+                image_url: `${host}/v1/premiados/${id}/image`
             });
         }
 

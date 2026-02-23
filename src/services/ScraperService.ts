@@ -105,14 +105,18 @@ export async function fetchPalpites(): Promise<{
     milhares: string[];
     centenas: string[];
 }> {
-    let browser;
+    let browser: any;
     try {
         log.info('SCRAPER', 'Buscando Palpites via Puppeteer...');
         const proxy = getBestProxy();
-        const args = ['--no-sandbox'];
+        const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
         if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
 
-        browser = await puppeteer.launch({ headless: true, args });
+        browser = await puppeteer.launch({
+            headless: true,
+            args,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+        });
         const page = await browser.newPage();
 
         if (proxy?.username && proxy?.password) {
@@ -123,6 +127,7 @@ export async function fetchPalpites(): Promise<{
         await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
         const html = await page.content();
+        log.info('SCRAPER', `Conteúdo recebido: ${html.length} bytes`);
         const $ = cheerio.load(html);
         const text = $('body').text();
 
@@ -146,7 +151,7 @@ export async function fetchPalpites(): Promise<{
         const milhares: string[] = [];
         const centenas: string[] = [];
         // The hyphen separated lines are usually in <p> or <div> blocks
-        $('p, div, span').each((i, el) => {
+        $('p, div, span').each((i: number, el: any) => {
             const elText = $(el).text();
             if (elText.includes('-') && /\d{3,4}/.test(elText) && elText.length < 500) {
                 const numbers = elText.split('-').map(n => n.trim()).filter(n => /^\d+$/.test(n));
@@ -157,9 +162,12 @@ export async function fetchPalpites(): Promise<{
             }
         });
 
+        if (grupos.length === 0) log.warn('SCRAPER', 'Nenhum grupo encontrado no texto do site.');
+        if (milhares.length === 0) log.warn('SCRAPER', 'Nenhuma milhar/centena encontrada no texto do site.');
+
         return { grupos, milhares, centenas };
     } catch (err: any) {
-        log.error('SCRAPER', 'fetchPalpites falhou', err);
+        log.error('SCRAPER', 'Erro em fetchPalpites', err);
         return { grupos: [], milhares: [], centenas: [] };
     } finally {
         if (browser) await browser.close();
@@ -219,10 +227,14 @@ export async function fetchCotacoes(): Promise<{ modalidade: string; valor: stri
     try {
         log.info('SCRAPER', 'Buscando cotações via Puppeteer no domínio amigosdobicho.com...');
         const proxy = getBestProxy();
-        const args = ['--no-sandbox'];
+        const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
         if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
 
-        browser = await puppeteer.launch({ headless: true, args });
+        browser = await puppeteer.launch({
+            headless: true,
+            args,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+        });
         const page = await browser.newPage();
 
         if (proxy?.username && proxy?.password) {
@@ -276,10 +288,14 @@ export async function fetchHoroscopo() {
     try {
         log.info('SCRAPER', 'Iniciando extração multi-página de Horóscopo em ojogodobicho.com...');
         const proxy = getBestProxy();
-        const args = ['--no-sandbox'];
+        const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
         if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
 
-        browser = await puppeteer.launch({ headless: true, args });
+        browser = await puppeteer.launch({
+            headless: true,
+            args,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+        });
         const page = await browser.newPage();
 
         if (proxy?.username && proxy?.password) {
