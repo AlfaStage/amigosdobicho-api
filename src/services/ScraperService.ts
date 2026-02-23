@@ -42,6 +42,8 @@ const API_FALLBACK = 'https://api.amigosdobicho.com/external-results/results/sta
  */
 export async function fetchResultados(estado: string, date: string = todayStr()): Promise<any[]> {
     let data: any[] = [];
+    let apiError = false;
+
     try {
         const res = await axios.get(API_BASE, {
             ...getAxiosConfig(),
@@ -49,11 +51,14 @@ export async function fetchResultados(estado: string, date: string = todayStr())
         });
         data = Array.isArray(res.data) ? res.data : [];
     } catch (err: any) {
-        log.error('SCRAPER', `API principal falhou para ${estado}. Tentando fallback...`, err.message);
+        apiError = true;
+        log.warn('SCRAPER', `Resultados [${estado}]: API principal falhou. Tentando fallback...`, err.message);
     }
 
     if (data.length === 0) {
-        log.warn('SCRAPER', `API vazia ou com erro para ${estado}. Acionando fallback...`);
+        if (!apiError) {
+            log.info('SCRAPER', `Resultados [${estado}]: Nenhum dado encontrado na API principal.`);
+        }
         try {
             const fallbackUrl = `${API_FALLBACK}/${estado}`;
             const fallbackRes = await axios.get(fallbackUrl, {
@@ -75,10 +80,10 @@ export async function fetchResultados(estado: string, date: string = todayStr())
             }));
 
             if (data.length > 0) {
-                log.success('SCRAPER', `Fallback recuperou ${data.length} resultados para ${estado}.`);
+                log.success('SCRAPER', `Resultados [${estado}]: Fallback recuperou ${data.length} loterias.`);
             }
         } catch (fallbackErr: any) {
-            log.error('SCRAPER', `API de fallback também falhou para ${estado}`, fallbackErr.message);
+            log.error('SCRAPER', `Resultados [${estado}]: API de fallback falhou`, fallbackErr.message);
         }
     }
 
@@ -100,15 +105,15 @@ export async function fetchAllResultados(): Promise<any[]> {
 /**
  * Fetches daily palpites from resultadofacil.
  */
-export async function fetchPalpites(): Promise<{
+export async function fetchPalpites(useProxy = true): Promise<{
     grupos: { bicho: string; grupo: number; dezenas: string }[];
     milhares: string[];
     centenas: string[];
 }> {
     let browser: any;
     try {
-        log.info('SCRAPER', 'Buscando Palpites via Puppeteer...');
-        let proxy = getBestProxy();
+        log.info('SCRAPER', `Buscando Palpites via Puppeteer (Proxy: ${useProxy})...`);
+        let proxy = useProxy ? getBestProxy() : null;
         if (proxy) {
             log.info('SCRAPER', `Usando proxy ${proxy.host}:${proxy.port} (${(proxy as any).country || '??'}) para Palpites`);
         } else {
@@ -129,20 +134,23 @@ export async function fetchPalpites(): Promise<{
             await page.authenticate({ username: proxy.username, password: proxy.password });
         }
 
-        // Evasion: Realistic headers and navigator properties
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Referer': 'https://www.google.com/'
+        // Stealth: Randomize window properties
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            // @ts-ignore
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en'] });
         });
 
         // Verify IP (to confirm proxy is active)
-        try {
-            await page.goto('https://api.ipify.org?format=json', { waitUntil: 'networkidle2', timeout: 10000 });
-            const ipData = JSON.parse(await page.evaluate(() => document.body.innerText));
-            log.info('SCRAPER', `IP Detectado pela Web: ${ipData.ip}`);
-        } catch (e) {
-            log.warn('SCRAPER', 'Não foi possível verificar o IP público');
+        if (proxy) {
+            try {
+                await page.goto('https://api.ipify.org?format=json', { waitUntil: 'networkidle2', timeout: 8000 });
+                const ipData = JSON.parse(await page.evaluate(() => document.body.innerText));
+                log.info('SCRAPER', `IP Verificado: ${ipData.ip}`);
+            } catch (e) {
+                log.warn('SCRAPER', 'Proxy parece lento ou instável (IP check timeout).');
+            }
         }
 
         log.info('SCRAPER', `Navegando para ${PALPITES_URL}...`);
@@ -150,9 +158,8 @@ export async function fetchPalpites(): Promise<{
         let needsFallback = false;
 
         try {
-            await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 35000 });
-            // Wait a bit more for dynamic content
-            await new Promise(r => setTimeout(r, 5000));
+            await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+            await new Promise(r => setTimeout(r, 4000));
             html = await page.content();
 
             if (html.includes('Checking your browser') || html.length < 5000 || html.includes('Acesso bloqueado') || html.includes('gocache-error-page') || html.toLowerCase().includes('forbidden')) {
@@ -168,10 +175,9 @@ export async function fetchPalpites(): Promise<{
         if (needsFallback) {
             try {
                 // Navigate to Google
-                await page.goto('https://www.google.com/search?q=resultado+facil+palpites+do+dia+hoje', { waitUntil: 'networkidle2' });
-                await new Promise(r => setTimeout(r, 4000));
+                await page.goto('https://www.google.com/search?q=resultado+facil+palpites+do+dia+hoje', { waitUntil: 'networkidle2', timeout: 20000 });
+                await new Promise(r => setTimeout(r, 3000));
 
-                // Find link. Search all links for the domain.
                 const targetLink = await page.evaluate(() => {
                     const links = Array.from(document.querySelectorAll('a'));
                     const match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
@@ -180,38 +186,39 @@ export async function fetchPalpites(): Promise<{
 
                 if (targetLink) {
                     log.info('SCRAPER', `Link encontrado no Google (${targetLink}). Navegando via Referer...`);
-                    await page.goto(targetLink, { waitUntil: 'networkidle2', timeout: 45000 });
-                    await new Promise(r => setTimeout(r, 5000));
+                    await page.goto(targetLink, { waitUntil: 'networkidle2', timeout: 30000 });
+                    await new Promise(r => setTimeout(r, 4000));
                     html = await page.content();
                 } else {
-                    log.error('SCRAPER', 'Link do ResultadoFácil não encontrado no Google. Tentando busca específica...');
-                    await page.goto('https://www.google.com/search?q=site:resultadofacil.com.br+"palpites+do+dia"', { waitUntil: 'networkidle2' });
-                    await new Promise(r => setTimeout(r, 3000));
+                    log.error('SCRAPER', 'Link não encontrado no Google. Tentando busca específica...');
+                    await page.goto('https://www.google.com/search?q=site:resultadofacil.com.br+"palpites+do+dia"', { waitUntil: 'networkidle2', timeout: 15000 });
+                    await new Promise(r => setTimeout(r, 2000));
                     const retryLink = await page.evaluate(() => {
                         const links = Array.from(document.querySelectorAll('a'));
                         const match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
                         return match ? match.href : null;
                     });
                     if (retryLink) {
-                        await page.goto(retryLink, { waitUntil: 'networkidle2', timeout: 45000 });
-                        await new Promise(r => setTimeout(r, 5000));
+                        await page.goto(retryLink, { waitUntil: 'networkidle2', timeout: 30000 });
+                        await new Promise(r => setTimeout(r, 4000));
                         html = await page.content();
                     }
                 }
-            } catch (fallbackErr) {
-                log.error('SCRAPER', 'Falha fatal no fallback via Google', fallbackErr);
+            } catch (fallbackErr: any) {
+                log.error('SCRAPER', 'Falha fatal no fallback via Google', fallbackErr.message);
+                // Se falhou no fallback e estamos usando proxy, força erro para pegar no catch externo
+                if (useProxy) throw new Error(`Fallback falhou no proxy: ${fallbackErr.message}`);
             }
+        }
+
+        // Se ainda estiver bloqueado ou vazio APÓS fallback, força erro para failover do proxy
+        if (useProxy && (html.length < 5000 || html.includes('Acesso bloqueado'))) {
+            throw new Error('Bloqueio persistente detectado mesmo após fallback.');
         }
 
         const cleanHtml = log.sanitize(html);
         log.info('SCRAPER', `Conteúdo recebido: ${html.length} bytes`);
         const $ = cheerio.load(html);
-
-        // Se a página for muito curta e n tiver o texto, provavel q pegou captcha
-        if (html.length < 5000 || html.includes('Acesso bloqueado')) {
-            const bodyText = log.sanitize($('body').text().slice(0, 150));
-            log.warn('SCRAPER', 'Página de palpites muito curta ou bloqueada.', { text: bodyText });
-        }
 
         const text = $('body').text();
 
@@ -222,7 +229,6 @@ export async function fetchPalpites(): Promise<{
         while ((match = grupoRegex.exec(text)) !== null) {
             const bicho = match[1].trim();
             const grupo = parseInt(match[2], 10);
-            // Look for dezenas nearby
             const afterText = text.slice(match.index + match[0].length, match.index + match[0].length + 200);
             const dezenasMatch = afterText.match(/Dezenas?:\s*([\d,\s]+)/i);
             const dezenas = dezenasMatch ? dezenasMatch[1].trim() : '';
@@ -231,10 +237,8 @@ export async function fetchPalpites(): Promise<{
             }
         }
 
-        // Extract milhares and centenas (lists of numbers separated by '-')
         const milhares: string[] = [];
         const centenas: string[] = [];
-        // The hyphen separated lines are usually in <p> or <div> blocks
         $('p, div, span').each((i: number, el: any) => {
             const elText = $(el).text();
             if (elText.includes('-') && /\d{3,4}/.test(elText) && elText.length < 500) {
@@ -251,7 +255,14 @@ export async function fetchPalpites(): Promise<{
 
         return { grupos, milhares, centenas };
     } catch (err: any) {
-        log.error('SCRAPER', 'Erro em fetchPalpites', err);
+        log.error('SCRAPER', `Erro em fetchPalpites (Proxy: ${useProxy})`, err.message || err);
+
+        // Se falhou usando proxy por timeout/rede OU bloqueio, tenta sem proxy
+        if (useProxy) {
+            log.warn('SCRAPER', 'Falha total usando Proxy. Tentando CONEXÃO DIRETA agora...');
+            return fetchPalpites(false);
+        }
+
         return { grupos: [], milhares: [], centenas: [] };
     } finally {
         if (browser) await browser.close();
