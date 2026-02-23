@@ -140,6 +140,8 @@ export async function fetchPalpites(useProxy = true): Promise<{
             // @ts-ignore
             window.chrome = { runtime: {} };
             Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en'] });
+            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+            Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
         });
 
         // Verify IP (to confirm proxy is active)
@@ -166,58 +168,124 @@ export async function fetchPalpites(useProxy = true): Promise<{
                 log.warn('SCRAPER', 'Conteúdo detectado como bloqueio (GoCache/Cloudflare/Forbidden).');
                 needsFallback = true;
             }
-        } catch (err) {
-            log.warn('SCRAPER', 'Navegação direta falhou ou deu timeout. Tentando fallback via Google...');
+        } catch (err: any) {
+            log.warn('SCRAPER', `Navegação direta falhou ou deu timeout: ${err.message}. Tentando fallback via Google...`);
             needsFallback = true;
         }
 
-        // Tenta Fallback via Google se necessário
+        // Tenta Fallback via Motores de Busca se necessário
         if (needsFallback) {
+            let recovered = false;
+
+            // 1. TENTATIVA: GOOGLE
             try {
-                // Navigate to Google
-                await page.goto('https://www.google.com/search?q=resultado+facil+palpites+do+dia+hoje', { waitUntil: 'networkidle2', timeout: 20000 });
+                log.info('SCRAPER', 'Tentando fallback via Google...');
+                await page.goto('https://www.google.com/search?q=site:resultadofacil.com.br+palpites+do+dia', { waitUntil: 'networkidle2', timeout: 20000 });
                 await new Promise(r => setTimeout(r, 3000));
+
+                // Handle Google Consent
+                await page.evaluate(() => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const accept = buttons.find(b => b.innerText.includes('Aceitar') || b.innerText.includes('Accept') || b.innerText.includes('Concordo'));
+                    if (accept) (accept as HTMLElement).click();
+                });
 
                 const targetLink = await page.evaluate(() => {
                     const links = Array.from(document.querySelectorAll('a'));
-                    const match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
+                    // Primeiro tenta o link direto
+                    let match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
+                    if (match) return match.href;
+                    // Se não, qualquer link do domínio
+                    match = links.find(a => a.href.includes('resultadofacil.com.br'));
                     return match ? match.href : null;
                 });
 
                 if (targetLink) {
-                    log.info('SCRAPER', `Link encontrado no Google (${targetLink}). Navegando via Referer...`);
+                    log.info('SCRAPER', `Link encontrado no Google (${targetLink}). Navegando...`);
                     await page.goto(targetLink, { waitUntil: 'networkidle2', timeout: 30000 });
                     await new Promise(r => setTimeout(r, 4000));
+
+                    // Se não for a página de palpites, tenta clicar no menu
+                    if (!page.url().includes('palpites-do-dia')) {
+                        log.info('SCRAPER', 'Na home/outro. Procurando link de Palpites na página...');
+                        const clicked = await page.evaluate(() => {
+                            const links = Array.from(document.querySelectorAll('a'));
+                            const pLink = links.find(a => a.innerText.toLowerCase().includes('palpites') || a.href.includes('palpites-do-dia'));
+                            if (pLink) {
+                                (pLink as HTMLElement).click();
+                                return true;
+                            }
+                            return false;
+                        });
+                        if (clicked) {
+                            await new Promise(r => setTimeout(r, 5000));
+                        }
+                    }
+
                     html = await page.content();
-                } else {
-                    log.error('SCRAPER', 'Link não encontrado no Google. Tentando busca específica...');
-                    await page.goto('https://www.google.com/search?q=site:resultadofacil.com.br+"palpites+do+dia"', { waitUntil: 'networkidle2', timeout: 15000 });
-                    await new Promise(r => setTimeout(r, 2000));
-                    const retryLink = await page.evaluate(() => {
+                    if (html.length > 5000 && !html.includes('Acesso bloqueado')) recovered = true;
+                }
+            } catch (e: any) {
+                log.error('SCRAPER', 'Falha no fallback Google', e.message);
+            }
+
+            // 2. TENTATIVA: BING (se Google falhou)
+            if (!recovered) {
+                try {
+                    log.info('SCRAPER', 'Google falhou. Tentando fallback via BING...');
+                    await page.goto('https://www.bing.com/search?q=site:resultadofacil.com.br+palpites+do+dia', { waitUntil: 'networkidle2', timeout: 20000 });
+                    await new Promise(r => setTimeout(r, 3000));
+
+                    const bingLink = await page.evaluate(() => {
                         const links = Array.from(document.querySelectorAll('a'));
-                        const match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
+                        let match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
+                        if (match) return match.href;
+                        match = links.find(a => a.href.includes('resultadofacil.com.br'));
                         return match ? match.href : null;
                     });
-                    if (retryLink) {
-                        await page.goto(retryLink, { waitUntil: 'networkidle2', timeout: 30000 });
+
+                    if (bingLink) {
+                        log.info('SCRAPER', `Link encontrado no Bing (${bingLink}). Navegando...`);
+                        await page.goto(bingLink, { waitUntil: 'networkidle2', timeout: 30000 });
                         await new Promise(r => setTimeout(r, 4000));
+
+                        if (!page.url().includes('palpites-do-dia')) {
+                            log.info('SCRAPER', 'Na home/outro via Bing. Procurando link de Palpites...');
+                            const clickedB = await page.evaluate(() => {
+                                const links = Array.from(document.querySelectorAll('a'));
+                                const pLink = links.find(a => a.innerText.toLowerCase().includes('palpites') || a.href.includes('palpites-do-dia'));
+                                if (pLink) {
+                                    (pLink as HTMLElement).click();
+                                    return true;
+                                }
+                                return false;
+                            });
+                            if (clickedB) {
+                                await new Promise(r => setTimeout(r, 5000));
+                            }
+                        }
+
                         html = await page.content();
+                        if (html.length > 5000 && !html.includes('Acesso bloqueado')) recovered = true;
                     }
+                } catch (e: any) {
+                    log.error('SCRAPER', 'Falha no fallback Bing', e.message);
                 }
-            } catch (fallbackErr: any) {
-                log.error('SCRAPER', 'Falha fatal no fallback via Google', fallbackErr.message);
-                // Se falhou no fallback e estamos usando proxy, força erro para pegar no catch externo
-                if (useProxy) throw new Error(`Fallback falhou no proxy: ${fallbackErr.message}`);
+            }
+
+            if (!recovered && useProxy) {
+                throw new Error('Bloqueio persistente em todos os motores de busca usando Proxy.');
             }
         }
 
-        // Se ainda estiver bloqueado ou vazio APÓS fallback, força erro para failover do proxy
-        if (useProxy && (html.length < 5000 || html.includes('Acesso bloqueado'))) {
-            throw new Error('Bloqueio persistente detectado mesmo após fallback.');
+        const cleanHtml = log.sanitize(html);
+        log.info('SCRAPER', `Conteúdo final recebido: ${html.length} bytes`);
+        if (html.length < 5000 || html.includes('Acesso bloqueado')) {
+            const snippet = html.replace(/<[^>]*>/g, '').slice(0, 150).trim();
+            log.warn('SCRAPER', `Página parece bloqueada ou inválida. Início do texto: ${snippet}`);
+            if (useProxy) throw new Error('Conteúdo inválido após todas as tentativas.');
         }
 
-        const cleanHtml = log.sanitize(html);
-        log.info('SCRAPER', `Conteúdo recebido: ${html.length} bytes`);
         const $ = cheerio.load(html);
 
         const text = $('body').text();
