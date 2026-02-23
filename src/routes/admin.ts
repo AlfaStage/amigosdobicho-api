@@ -80,37 +80,34 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         try {
             if (type === 'palpites') {
                 const palpites = await fetchPalpites();
-                if (palpites.grupos.length > 0) {
+                if (palpites.grupos.length > 0 || palpites.milhares.length > 0) {
                     savePalpites(todayStr(), palpites);
                     return { success: true, message: 'Palpites extraídos e salvos com sucesso', palpites: { grupos: palpites.grupos.length, milhares: palpites.milhares.length, centenas: palpites.centenas.length } };
                 }
-                return reply.code(400).send({ error: 'Nenhum palpite retornado do scraper' });
+                return { success: false, message: 'Nenhum palpite retornado do scraper. Verifique se o site está bloqueado.' };
             } else if (type === 'horoscopo') {
                 const horoscopo = await fetchHoroscopo();
                 if (horoscopo.length > 0) {
-                    // Update: Horóscopo doesn't have a save method exported here directly, it's used elsewhere or maybe stored in DB. Let's look if there's saveHorosopo... Actually StartupRecoveryService saves it. But here we can just return it or if there is a save method, we use it. wait! We imported processarRecuperacaoFalhas. Let's just use the scraper. Actually fetchHoroscopo is not saved in ScraperService, it's saved in  HoroscopoService.
-                    // For now, let's just use processarRecuperacaoFalhas for 'all' or specific if it's there. Just returning scraped data for now.
                     return { success: true, message: 'Horóscopo extraído', count: horoscopo.length };
                 }
-                return reply.code(400).send({ error: 'Nenhum horóscopo retornado do scraper' });
+                return { success: false, message: 'Nenhum horóscopo retornado do scraper.' };
             } else if (type === 'cotacoes') {
                 const cotacoes = await fetchCotacoes();
                 if (cotacoes.length > 0) {
                     saveCotacoes(cotacoes);
                     return { success: true, message: 'Cotações extraídas e salvas', count: cotacoes.length };
                 }
-                return reply.code(400).send({ error: 'Nenhuma cotação retornada' });
+                return { success: false, message: 'Nenhuma cotação retornada' };
             } else if (type === 'loterias') {
                 const resultados = await fetchAllResultados();
                 return { success: true, message: 'Loterias extraídas na totalidade', count: resultados.length };
             } else if (type === 'all') {
-                // To force all, we can call the recovery which forces everything missing or we just call the data tasks
                 await runStartupRecovery();
                 return { success: true, message: 'Processo de recuperação/scrape completo acionado' };
             }
             return reply.code(400).send({ error: 'Tipo desconhecido' });
         } catch (err: any) {
-            return reply.code(500).send({ error: err.message });
+            return reply.code(200).send({ success: false, error: err.message });
         }
     });
 

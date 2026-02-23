@@ -60,7 +60,34 @@ async function main() {
     });
 
     // 4. CORS
-    await app.register(cors, { origin: true });
+    await app.register(cors, {
+        origin: true,
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+    });
+
+    // Global Logging Hook
+    app.addHook('onRequest', (req, reply, done) => {
+        (req as any).startTime = Date.now();
+        done();
+    });
+
+    app.addHook('onResponse', (req, reply, done) => {
+        const { method, url } = req;
+        const { statusCode } = reply;
+        const startTime = (req as any).startTime || Date.now();
+        const duration = Date.now() - startTime;
+
+        if (url.includes('/api/') || url.startsWith('/v1/')) {
+            const level = statusCode >= 400 ? 'warn' : 'info';
+            log[level]('API', `${method} ${url}`, {
+                status: statusCode,
+                ms: duration,
+                ip: req.ip
+            });
+        }
+        done();
+    });
 
     // 5. Swagger/OpenAPI
     await app.register(fastifySwagger, {
@@ -71,7 +98,9 @@ async function main() {
                 version: '1.0.0',
                 contact: { name: 'AlfaStage', url: 'https://alfastage.com.br' },
             },
-            servers: [{ url: `http://localhost:${PORT}`, description: 'Local Dev Server' }],
+            servers: [
+                { url: process.env.PUBLIC_URL || `http://localhost:${PORT}`, description: 'Server URL' }
+            ],
             tags: [
                 { name: 'Resultados', description: 'Consulta de resultados de sorteios' },
                 { name: 'Lotéricas', description: 'Lista de bancas e configurações' },

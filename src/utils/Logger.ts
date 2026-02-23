@@ -95,4 +95,9 @@ export const log = {
             console.log(`${color}   ▸ ${RESET}${line}`);
         }
     },
+
+    /** Sanitizes strings for single-line logging */
+    sanitize(text: string): string {
+        return text.replace(/\s+/g, ' ').trim();
+    }
 };

@@ -140,19 +140,43 @@ export async function fetchPalpites(): Promise<{
 
         let html = await page.content();
 
-        // Se pegou Cloudflare, espera mais um pouco
-        if (html.includes('Checking your browser') || html.length < 5000) {
-            log.warn('SCRAPER', 'Detectada possível proteção ou página incompleta. Aguardando mais 10s...');
-            await new Promise(r => setTimeout(r, 10000));
-            html = await page.content();
+        // Se pegou Cloudflare ou conteúdo restrito, tenta Fallback via Google
+        if (html.includes('Checking your browser') || html.length < 5000 || html.includes('Acesso bloqueado')) {
+            log.warn('SCRAPER', 'Acesso direto bloqueado. Tentando fallback via Google Search...');
+
+            try {
+                // Navigate to Google
+                await page.goto('https://www.google.com/search?q=resultado+facil+palpites+do+dia', { waitUntil: 'networkidle2' });
+                await new Promise(r => setTimeout(r, 2000));
+
+                // Click on the first result that looks like resultadofacil
+                const linkSelector = 'a[href*="resultadofacil.com.br/palpites-do-dia"]';
+                const link = await page.$(linkSelector);
+
+                if (link) {
+                    log.info('SCRAPER', 'Link encontrado no Google. Clicando...');
+                    await Promise.all([
+                        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+                        link.click()
+                    ]);
+                    await new Promise(r => setTimeout(r, 5000)); // Espera renderizar
+                    html = await page.content();
+                } else {
+                    log.error('SCRAPER', 'Link do ResultadoFácil não encontrado no topo do Google.');
+                }
+            } catch (fallbackErr) {
+                log.error('SCRAPER', 'Falha no fallback via Google', fallbackErr);
+            }
         }
 
+        const cleanHtml = log.sanitize(html);
         log.info('SCRAPER', `Conteúdo recebido: ${html.length} bytes`);
         const $ = cheerio.load(html);
 
         // Se a página for muito curta e n tiver o texto, provavel q pegou captcha
-        if (html.length < 5000) {
-            log.warn('SCRAPER', 'Página de palpites muito curta. Possível bloqueio Cloudflare/Captcha.', { text: $('body').text().slice(0, 100) });
+        if (html.length < 5000 || html.includes('Acesso bloqueado')) {
+            const bodyText = log.sanitize($('body').text().slice(0, 150));
+            log.warn('SCRAPER', 'Página de palpites muito curta ou bloqueada.', { text: bodyText });
         }
 
         const text = $('body').text();
