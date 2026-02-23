@@ -97,7 +97,7 @@ Módulo desenhado contra perdas em caso de gargalos.
 ### 3.5 MCP Server Service: A Ponte de Inteligência Artificial
 Integrado diretamente no ecossistema Fastify, este serviço transforma o Amigos do Bicho em uma API nativa para LLMs trabalharem autonomamente.
 *   **Transporte SSE (Server-Sent Events):** Diferente da API REST pura, a conexão inicial exige handshake SSE permitindo push assíncrono do servidor para o Agent (Mão-dupla via `/mcp/message`).
-*   **Streaming Content:** Preparado para devolver fluxos contantes de dados (Streaming HTTP), essencial para queries grandes do banco SQLite sem estourar o limite de tempo do LLM ou dar timeout em ferramentas externas (ex: n8n, Claude).
+*   **Streaming Content:** Preparado para devolver fluxos contantes de dados (amigos), essencial para queries grandes do banco SQLite sem estourar o limite de tempo do LLM ou dar timeout em ferramentas externas (ex: n8n, Claude).
 *   **Declaração de Tooling:** O serviço injeta as rotas da API REST como "Ferramentas" (Tools) compreensíveis para IAs (ex: `tabela_bichos`, `listar_lotericas`, `como_jogar`), convertendo os outputs de JSON cru para Textos/Markdown digeríveis em prompt context.
 
 ---

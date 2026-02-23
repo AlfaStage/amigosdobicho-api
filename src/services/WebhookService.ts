@@ -44,6 +44,7 @@ export async function notifyAll(event: string, payload: any): Promise<void> {
             });
 
             logDelivery(id, event, 'success', response.status, JSON.stringify(response.data)?.slice(0, 500));
+            log.info('WEBHOOK', `Evento ${event} enviado para ${url}`, { status: response.status });
 
             // Reset failure counter on success
             if (failures > 0) {
@@ -54,6 +55,7 @@ export async function notifyAll(event: string, payload: any): Promise<void> {
             const errorMsg = err.message || 'Unknown error';
 
             logDelivery(id, event, 'error', statusCode, null, errorMsg);
+            log.error('WEBHOOK', `Falha ao enviar ${event} para ${url}`, err, { status: statusCode });
 
             // Increment failures and auto-disable
             const newFailures = failures + 1;

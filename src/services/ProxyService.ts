@@ -238,12 +238,14 @@ export async function processBulkProxies(text: string): Promise<{ totalFound: nu
             const result = await testProxy(p.host, p.port, p.protocol, p.username, p.password);
             if (result.alive) {
                 try {
+                    // Tenta detectar o país se possível, ou deixa nulo
+                    const detectedCountry = p.country || null;
                     db.run(
                         `INSERT INTO proxies (id, host, port, protocol, username, password, source, country, alive, score, latency_ms, last_checked)
-                         VALUES (?, ?, ?, ?, ?, ?, 'manual', 'BR', 1, 100, ?, datetime('now'))
+                         VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, 1, 100, ?, datetime('now'))
                          ON CONFLICT(host, port) DO UPDATE SET 
-                            alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), username = ?, password = ?, source = 'manual', country = 'BR'`,
-                        [crypto.randomUUID(), p.host, p.port, p.protocol, p.username || null, p.password || null, result.latency, result.latency, p.username || null, p.password || null]
+                            alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), username = ?, password = ?, source = 'manual', country = ?`,
+                        [crypto.randomUUID(), p.host, p.port, p.protocol, p.username || null, p.password || null, detectedCountry, result.latency, result.latency, p.username || null, p.password || null, detectedCountry]
                     );
                     added++;
                 } catch { /* ignorar erro de parse sql */ }

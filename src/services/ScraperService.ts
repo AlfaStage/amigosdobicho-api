@@ -110,7 +110,7 @@ export async function fetchPalpites(): Promise<{
         log.info('SCRAPER', 'Buscando Palpites via Puppeteer...');
         let proxy = getBestProxy();
         if (proxy) {
-            log.info('SCRAPER', `Usando proxy ${proxy.host}:${proxy.port} para Palpites`);
+            log.info('SCRAPER', `Usando proxy ${proxy.host}:${proxy.port} (${(proxy as any).country || '??'}) para Palpites`);
         } else {
             log.info('SCRAPER', `Buscando Palpites sem proxy`);
         }
@@ -129,43 +129,68 @@ export async function fetchPalpites(): Promise<{
             await page.authenticate({ username: proxy.username, password: proxy.password });
         }
 
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        await page.setExtraHTTPHeaders({ 'Referer': 'https://www.google.com/' });
+        // Evasion: Realistic headers and navigator properties
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://www.google.com/'
+        });
+
+        // Verify IP (to confirm proxy is active)
+        try {
+            await page.goto('https://api.ipify.org?format=json', { waitUntil: 'networkidle2', timeout: 10000 });
+            const ipData = JSON.parse(await page.evaluate(() => document.body.innerText));
+            log.info('SCRAPER', `IP Detectado pela Web: ${ipData.ip}`);
+        } catch (e) {
+            log.warn('SCRAPER', 'Não foi possível verificar o IP público');
+        }
 
         log.info('SCRAPER', `Navegando para ${PALPITES_URL}...`);
         await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 45000 });
 
         // Wait a bit more for dynamic content
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 5000));
 
         let html = await page.content();
 
         // Se pegou Cloudflare ou conteúdo restrito, tenta Fallback via Google
-        if (html.includes('Checking your browser') || html.length < 5000 || html.includes('Acesso bloqueado')) {
-            log.warn('SCRAPER', 'Acesso direto bloqueado. Tentando fallback via Google Search...');
+        if (html.includes('Checking your browser') || html.length < 5000 || html.includes('Acesso bloqueado') || html.includes('gocache-error-page') || html.toLowerCase().includes('forbidden')) {
+            log.warn('SCRAPER', 'Acesso direto bloqueado (GoCache/Cloudflare/Forbidden). Tentando fallback via Google Search...');
 
             try {
                 // Navigate to Google
-                await page.goto('https://www.google.com/search?q=resultado+facil+palpites+do+dia', { waitUntil: 'networkidle2' });
-                await new Promise(r => setTimeout(r, 2000));
+                await page.goto('https://www.google.com/search?q=resultado+facil+palpites+do+dia+hoje', { waitUntil: 'networkidle2' });
+                await new Promise(r => setTimeout(r, 4000));
 
-                // Click on the first result that looks like resultadofacil
-                const linkSelector = 'a[href*="resultadofacil.com.br/palpites-do-dia"]';
-                const link = await page.$(linkSelector);
+                // Find link. Search all links for the domain.
+                const targetLink = await page.evaluate(() => {
+                    const links = Array.from(document.querySelectorAll('a'));
+                    const match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
+                    return match ? match.href : null;
+                });
 
-                if (link) {
-                    log.info('SCRAPER', 'Link encontrado no Google. Clicando...');
-                    await Promise.all([
-                        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
-                        link.click()
-                    ]);
-                    await new Promise(r => setTimeout(r, 5000)); // Espera renderizar
+                if (targetLink) {
+                    log.info('SCRAPER', `Link encontrado no Google (${targetLink}). Navegando via Referer...`);
+                    await page.goto(targetLink, { waitUntil: 'networkidle2', timeout: 45000 });
+                    await new Promise(r => setTimeout(r, 5000));
                     html = await page.content();
                 } else {
-                    log.error('SCRAPER', 'Link do ResultadoFácil não encontrado no topo do Google.');
+                    log.error('SCRAPER', 'Link do ResultadoFácil não encontrado no Google. Tentando busca específica...');
+                    await page.goto('https://www.google.com/search?q=site:resultadofacil.com.br+"palpites+do+dia"', { waitUntil: 'networkidle2' });
+                    await new Promise(r => setTimeout(r, 3000));
+                    const retryLink = await page.evaluate(() => {
+                        const links = Array.from(document.querySelectorAll('a'));
+                        const match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
+                        return match ? match.href : null;
+                    });
+                    if (retryLink) {
+                        await page.goto(retryLink, { waitUntil: 'networkidle2', timeout: 45000 });
+                        await new Promise(r => setTimeout(r, 5000));
+                        html = await page.content();
+                    }
                 }
             } catch (fallbackErr) {
-                log.error('SCRAPER', 'Falha no fallback via Google', fallbackErr);
+                log.error('SCRAPER', 'Falha fatal no fallback via Google', fallbackErr);
             }
         }
 

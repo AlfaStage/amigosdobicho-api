@@ -38,10 +38,19 @@ function formatMessage(cat: LogCategory, msg: string, meta?: Record<string, unkn
     const ts = `${DIM}${timestamp()}${RESET}`;
     const color = COLORS[cat] || '';
     const tag = `${color}[${cat}]${RESET}`;
-    let line = `${ts} ${tag} ${msg}`;
+
+    // Sanitize message to be single-line
+    const cleanMsg = msg.replace(/\r?\n|\r/g, ' ').trim();
+
+    let line = `${ts} ${tag} ${cleanMsg}`;
+
     if (meta && Object.keys(meta).length) {
         const metaStr = Object.entries(meta)
-            .map(([k, v]) => `${DIM}${k}=${RESET}${typeof v === 'object' ? JSON.stringify(v) : v}`)
+            .map(([k, v]) => {
+                let val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+                val = val.replace(/\r?\n|\r/g, ' ').trim(); // Avoid empty lines/breaking labels
+                return `${DIM}${k}=${RESET}${val}`;
+            })
             .join(' ');
         line += ` ${metaStr}`;
     }
@@ -62,15 +71,22 @@ export const log = {
     },
 
     error(cat: LogCategory, msg: string, error?: unknown, meta?: Record<string, unknown>): void {
-        console.error(formatMessage(cat, `❌ ${msg}`, meta));
+        const prefix = formatMessage(cat, `❌ ${msg}`, meta);
+        console.error(prefix);
+
         if (error instanceof Error) {
-            console.error(`${RED}   → ${error.message}${RESET}`);
+            const errorMsg = this.sanitize(error.message);
+            console.error(formatMessage(cat, `   → ${errorMsg}`));
             if (error.stack) {
-                const stackLines = error.stack.split('\n').slice(1, 4).map(l => `${DIM}     ${l.trim()}${RESET}`);
-                console.error(stackLines.join('\n'));
+                const stackLines = error.stack.split('\n')
+                    .slice(1, 4)
+                    .map(l => this.sanitize(l));
+                for (const line of stackLines) {
+                    if (line) console.error(formatMessage(cat, `     ${line}`));
+                }
             }
         } else if (error) {
-            console.error(`${RED}   → ${String(error)}${RESET}`);
+            console.error(formatMessage(cat, `   → ${this.sanitize(String(error))}`));
         }
     },
 
