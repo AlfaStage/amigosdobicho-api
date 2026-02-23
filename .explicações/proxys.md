@@ -75,3 +75,15 @@ URL: https://www.911proxy.com/web_v1/free-proxy/list?page_size=60&page=1&country
 ```
 
 **Protocolo map:** `{ 1: 'https', 2: 'http', 4: 'socks4', 5: 'socks5' }`
+
+---
+
+## Lógica de Seleção (getBestProxy)
+
+O sistema utiliza a seguinte prioridade para escolher o melhor proxy:
+1. **País:** Proxies identificados como `BR` (Brasil) têm prioridade máxima.
+2. **Score:** Entre proxies do mesmo país, ganha o que tiver maior pontuação (sucessos recentes).
+3. **Latência:** Em caso de empate, escolhe o que teve o tempo de resposta mais baixo.
+
+> [!NOTE]
+> Proxies manuais adicionados via Admin são automaticamente marcados como `BR` para ganhar prioridade, a menos que especificado o contrário.

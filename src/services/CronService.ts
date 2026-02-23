@@ -158,6 +158,21 @@ export function dailyForecastManager(): void {
     const loterias = getAllLotericas();
     let esperados = 0;
 
+    // Add extra tasks expectations
+    const extras = [
+        { slug: 'palpites', horario: '07:00' },
+        { slug: 'cotacoes', horario: '07:00' },
+        { slug: 'horoscopo', horario: '07:00' }
+    ];
+    for (const ex of extras) {
+        db.run(
+            `INSERT OR IGNORE INTO scraping_status (id, loterica_slug, data, horario, status)
+             VALUES (?, ?, ?, ?, 'pending')`,
+            [crypto.randomUUID(), ex.slug, today, ex.horario]
+        );
+        esperados++;
+    }
+
     for (const lot of loterias) {
         for (const h of lot.horarios) {
             if (h.dias.includes(currentDayOfWeek)) {

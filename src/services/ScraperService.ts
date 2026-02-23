@@ -108,7 +108,13 @@ export async function fetchPalpites(): Promise<{
     let browser: any;
     try {
         log.info('SCRAPER', 'Buscando Palpites via Puppeteer...');
-        const proxy = getBestProxy();
+        let proxy = getBestProxy();
+        if (proxy) {
+            log.info('SCRAPER', `Usando proxy ${proxy.host}:${proxy.port} para Palpites`);
+        } else {
+            log.info('SCRAPER', `Buscando Palpites sem proxy`);
+        }
+
         const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
         if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
 
@@ -123,12 +129,32 @@ export async function fetchPalpites(): Promise<{
             await page.authenticate({ username: proxy.username, password: proxy.password });
         }
 
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-        await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        await page.setExtraHTTPHeaders({ 'Referer': 'https://www.google.com/' });
 
-        const html = await page.content();
+        log.info('SCRAPER', `Navegando para ${PALPITES_URL}...`);
+        await page.goto(PALPITES_URL, { waitUntil: 'networkidle2', timeout: 45000 });
+
+        // Wait a bit more for dynamic content
+        await new Promise(r => setTimeout(r, 3000));
+
+        let html = await page.content();
+
+        // Se pegou Cloudflare, espera mais um pouco
+        if (html.includes('Checking your browser') || html.length < 5000) {
+            log.warn('SCRAPER', 'Detectada possível proteção ou página incompleta. Aguardando mais 10s...');
+            await new Promise(r => setTimeout(r, 10000));
+            html = await page.content();
+        }
+
         log.info('SCRAPER', `Conteúdo recebido: ${html.length} bytes`);
         const $ = cheerio.load(html);
+
+        // Se a página for muito curta e n tiver o texto, provavel q pegou captcha
+        if (html.length < 5000) {
+            log.warn('SCRAPER', 'Página de palpites muito curta. Possível bloqueio Cloudflare/Captcha.', { text: $('body').text().slice(0, 100) });
+        }
+
         const text = $('body').text();
 
         // Extract grupos: "Animal - Grupo XX"
@@ -217,6 +243,14 @@ export function savePalpites(data: string, palpites: {
 
     // After saving palpites, check if any EXISTING results (from earlier today) are winners
     checkPalpitesPremiados(data);
+
+    // Update Scraping Status
+    db.run(
+        `INSERT INTO scraping_status (id, loterica_slug, data, horario, status, updated_at)
+         VALUES (?, 'palpites', ?, '07:00', 'success', datetime('now'))
+         ON CONFLICT(loterica_slug, data, horario) DO UPDATE SET status = 'success', updated_at = datetime('now')`,
+        [crypto.randomUUID(), data]
+    );
 }
 
 /**
@@ -226,7 +260,13 @@ export async function fetchCotacoes(): Promise<{ modalidade: string; valor: stri
     let browser;
     try {
         log.info('SCRAPER', 'Buscando cotações via Puppeteer no domínio amigosdobicho.com...');
-        const proxy = getBestProxy();
+        let proxy = getBestProxy();
+        if (proxy) {
+            log.info('SCRAPER', `Usando proxy ${proxy.host}:${proxy.port} para Cotações`);
+        } else {
+            log.info('SCRAPER', `Buscando Cotações sem proxy`);
+        }
+
         const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
         if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
 
@@ -287,7 +327,13 @@ export async function fetchHoroscopo() {
     let browser;
     try {
         log.info('SCRAPER', 'Iniciando extração multi-página de Horóscopo em ojogodobicho.com...');
-        const proxy = getBestProxy();
+        let proxy = getBestProxy();
+        if (proxy) {
+            log.info('SCRAPER', `Usando proxy ${proxy.host}:${proxy.port} para Horóscopo`);
+        } else {
+            log.info('SCRAPER', `Buscando Horóscopo sem proxy`);
+        }
+
         const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'];
         if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
 
@@ -380,6 +426,15 @@ export function saveCotacoes(cotacoes: { modalidade: string; valor: string }[]):
             [crypto.randomUUID(), c.modalidade, c.valor, c.valor]
         );
     }
+
+    // Update Scraping Status
+    db.run(
+        `INSERT INTO scraping_status (id, loterica_slug, data, horario, status, updated_at)
+         VALUES (?, 'cotacoes', ?, '07:00', 'success', datetime('now'))
+         ON CONFLICT(loterica_slug, data, horario) DO UPDATE SET status = 'success', updated_at = datetime('now')`,
+        [crypto.randomUUID(), todayStr()]
+    );
+
     saveDatabase();
 }
 

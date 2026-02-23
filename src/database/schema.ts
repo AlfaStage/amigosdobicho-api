@@ -266,5 +266,6 @@ function createTables(): void {
 function runMigrations(): void {
   try { db.run("ALTER TABLE proxies ADD COLUMN username TEXT;"); } catch (e) { /* already exists */ }
   try { db.run("ALTER TABLE proxies ADD COLUMN password TEXT;"); } catch (e) { /* already exists */ }
+  try { db.run("ALTER TABLE proxies ADD COLUMN country TEXT;"); } catch (e) { /* already exists */ }
 }
 

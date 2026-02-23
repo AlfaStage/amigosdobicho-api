@@ -1,4 +1,5 @@
 import { saveDatabase } from '../database/schema.js';
+import crypto from 'crypto';
 
 export const SIGNOS = [
     'Áries', 'Touro', 'Gêmeos', 'Câncer', 'Leão', 'Virgem',
@@ -49,5 +50,14 @@ export function saveHoroscopo(db: any, data: string, entries: HoroscopoEntry[]):
     }
 
     stmt.free();
+
+    // Update Scraping Status
+    db.run(
+        `INSERT INTO scraping_status (id, loterica_slug, data, horario, status, updated_at)
+         VALUES (?, 'horoscopo', ?, '07:00', 'success', datetime('now'))
+         ON CONFLICT(loterica_slug, data, horario) DO UPDATE SET status = 'success', updated_at = datetime('now')`,
+        [crypto.randomUUID(), data]
+    );
+
     saveDatabase();
 }

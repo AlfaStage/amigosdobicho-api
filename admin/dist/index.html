@@ -36,6 +36,15 @@
         <div id="page-status" class="page active">
             <h2 class="page-title">Dashboard de Status</h2>
             <div class="cards" id="status-cards"></div>
+            <div class="card form-panel form-row"
+                style="margin-top: 20px; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; justify-content: flex-start;">
+                <h3 style="width: 100%; margin-bottom: 5px;">Ações Manuais de Raspagem</h3>
+                <button class="btn btn-primary" onclick="forceScrape('all')">⚠️ Forçar Tudo (Recovery)</button>
+                <button class="btn btn-outline" onclick="forceScrape('loterias')">🎲 Loterias</button>
+                <button class="btn btn-outline" onclick="forceScrape('palpites')">🎯 Palpites</button>
+                <button class="btn btn-outline" onclick="forceScrape('horoscopo')">♈ Horóscopo</button>
+                <button class="btn btn-outline" onclick="forceScrape('cotacoes')">💰 Cotações</button>
+            </div>
             <div class="card">
                 <table>
                     <thead>
@@ -234,6 +243,22 @@ http://192.168.0.1:3128"
       <td><span class="badge ${r.status === 'success' ? 'badge-green' : r.status === 'error' ? 'badge-red' : 'badge-yellow'}">${r.status}</span></td>
       <td>${r.tentativas}</td><td>${r.ultimo_erro || '-'}</td></tr>`).join('');
             } catch (e) { console.error(e); }
+        }
+
+        async function forceScrape(type) {
+            toast('Iniciando raspagem manual de: ' + type + '...');
+            try {
+                const r = await fetch('/api/status/force-scrape/' + type, { method: 'POST', headers }).then(checkAuth);
+                const d = await r.json();
+                if (d.success) {
+                    toast(d.message);
+                    loadStatus();
+                } else {
+                    toast('Erro: ' + (d.error || 'Desconhecido'), 'error');
+                }
+            } catch (e) {
+                toast('Erro na requisição: ' + e.message, 'error');
+            }
         }
 
         // ========== PROXIES ==========

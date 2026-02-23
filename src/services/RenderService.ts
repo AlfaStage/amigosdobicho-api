@@ -132,7 +132,7 @@ export function renderResultadoHtml(resultado: any): string {
     html = html.replace('19/02/2026', formatDateBR(resultado.data));
 
     // Replace tbody content
-    html = html.replace(/<tbody[^>]*>[\s\S]*?<\/tbody>/, `<tbody style="color: #333;">\n${rows}\n        </tbody>`);
+    html = html.replace(/<tbody[^>]*>[\s\S]*?<\/tbody>/, () => `<tbody style="color: #333;">\n${rows}\n        </tbody>`);
 
     return html;
 }
@@ -278,15 +278,15 @@ export function renderPremiadosDiaHtml(premiados: any[], data: string): string {
     // Replace sections in template - find the grid divs and replace their contents
     // Replace grupos section
     const grupoGridRegex = /(⭐ Grupos Premiados[\s\S]*?<\/div>\s*<div[^>]*display:\s*grid[^>]*>)([\s\S]*?)(<\/div>\s*<!--\s*SEÇÃO 2)/;
-    html = html.replace(grupoGridRegex, `$1\n${grupoCards || '<!-- Nenhum grupo premiado -->'}$3`);
+    html = html.replace(grupoGridRegex, (match, p1, p2, p3) => p1 + '\n' + (grupoCards || '<!-- Nenhum grupo premiado -->') + p3);
 
     // Replace centenas section
     const centenaGridRegex = /(⭐ Centenas Premiadas[\s\S]*?<\/div>\s*<div[^>]*display:\s*grid[^>]*>)([\s\S]*?)(<\/div>\s*<!--\s*SEÇÃO 3)/;
-    html = html.replace(centenaGridRegex, `$1\n${centenaCards || '<!-- Nenhuma centena premiada -->'}$3`);
+    html = html.replace(centenaGridRegex, (match, p1, p2, p3) => p1 + '\n' + (centenaCards || '<!-- Nenhuma centena premiada -->') + p3);
 
     // Replace milhares section
     const milharGridRegex = /(⭐ Milhares Premiadas[\s\S]*?<\/div>\s*<div[^>]*display:\s*grid[^>]*>)([\s\S]*?)(<\/div>\s*<!--\s*Rodapé)/;
-    html = html.replace(milharGridRegex, `$1\n${milharCards || '<!-- Nenhuma milhar premiada -->'}$3`);
+    html = html.replace(milharGridRegex, (match, p1, p2, p3) => p1 + '\n' + (milharCards || '<!-- Nenhuma milhar premiada -->') + p3);
 
     return html;
 }

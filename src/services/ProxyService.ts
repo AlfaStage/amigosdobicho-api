@@ -9,6 +9,7 @@ interface ProxyEntry {
     username?: string;
     password?: string;
     source: string;
+    country?: string;
 }
 
 const PROXY_SOURCES = {
@@ -33,7 +34,7 @@ async function fetchFromApis(): Promise<ProxyEntry[]> {
         for (const item of data) {
             const match = (item.proxy as string).match(/^(https?|socks[45]):\/\/([^:]+):(\d+)$/);
             if (match) {
-                proxies.push({ host: match[2], port: match[3], protocol: match[1], source: 'proxyscrape' });
+                proxies.push({ host: match[2], port: match[3], protocol: match[1], source: 'proxyscrape', country: 'BR' });
             }
         }
     } catch { log.warn('PROXY', 'ProxyScrape fetch falhou'); }
@@ -44,7 +45,7 @@ async function fetchFromApis(): Promise<ProxyEntry[]> {
         const data = res.data?.data || [];
         for (const item of data) {
             const protocol = (item.protocols as string[])?.[0] || 'http';
-            proxies.push({ host: item.ip, port: String(item.port), protocol, source: 'geonode' });
+            proxies.push({ host: item.ip, port: String(item.port), protocol, source: 'geonode', country: 'BR' });
         }
     } catch { log.warn('PROXY', 'Geonode fetch falhou'); }
 
@@ -54,7 +55,7 @@ async function fetchFromApis(): Promise<ProxyEntry[]> {
         const list = res.data?.data?.list || [];
         for (const item of list) {
             const protocol = PROTOCOL_MAP_911[item.protocol] || 'http';
-            proxies.push({ host: item.ip, port: String(item.port), protocol, source: '911proxy' });
+            proxies.push({ host: item.ip, port: String(item.port), protocol, source: '911proxy', country: 'BR' });
         }
     } catch { log.warn('PROXY', '911Proxy fetch falhou'); }
 
@@ -103,9 +104,9 @@ export async function runProxySweep(): Promise<{ added: number; tested: number; 
     for (const p of fetched) {
         try {
             db.run(
-                `INSERT OR IGNORE INTO proxies (id, host, port, protocol, source, alive, score)
-         VALUES (?, ?, ?, ?, ?, 1, 50)`,
-                [crypto.randomUUID(), p.host, p.port, p.protocol, p.source]
+                `INSERT OR IGNORE INTO proxies (id, host, port, protocol, source, country, alive, score)
+         VALUES (?, ?, ?, ?, ?, ?, 1, 50)`,
+                [crypto.randomUUID(), p.host, p.port, p.protocol, p.source, p.country || null]
             );
             added++;
         } catch { /* duplicate, ignore */ }
@@ -146,7 +147,13 @@ export async function runProxySweep(): Promise<{ added: number; tested: number; 
 export function getBestProxy(): { host: string; port: string; protocol: string; username?: string; password?: string; } | null {
     const db = getDb();
     const rows = db.exec(
-        'SELECT host, port, protocol, username, password FROM proxies WHERE alive = 1 ORDER BY score DESC, latency_ms ASC LIMIT 1'
+        `SELECT host, port, protocol, username, password FROM proxies 
+         WHERE alive = 1 
+         ORDER BY 
+            (CASE WHEN country = 'BR' THEN 1 ELSE 0 END) DESC, 
+            score DESC, 
+            latency_ms ASC 
+         LIMIT 1`
     );
     if (!rows.length || !rows[0].values.length) return null;
     const [host, port, protocol, username, password] = rows[0].values[0] as [string, string, string, string, string];
@@ -232,10 +239,10 @@ export async function processBulkProxies(text: string): Promise<{ totalFound: nu
             if (result.alive) {
                 try {
                     db.run(
-                        `INSERT INTO proxies (id, host, port, protocol, username, password, source, alive, score, latency_ms, last_checked)
-                         VALUES (?, ?, ?, ?, ?, ?, 'manual', 1, 100, ?, datetime('now'))
+                        `INSERT INTO proxies (id, host, port, protocol, username, password, source, country, alive, score, latency_ms, last_checked)
+                         VALUES (?, ?, ?, ?, ?, ?, 'manual', 'BR', 1, 100, ?, datetime('now'))
                          ON CONFLICT(host, port) DO UPDATE SET 
-                            alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), username = ?, password = ?, source = 'manual'`,
+                            alive = 1, latency_ms = ?, score = 100, last_checked = datetime('now'), username = ?, password = ?, source = 'manual', country = 'BR'`,
                         [crypto.randomUUID(), p.host, p.port, p.protocol, p.username || null, p.password || null, result.latency, result.latency, p.username || null, p.password || null]
                     );
                     added++;
