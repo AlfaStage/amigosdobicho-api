@@ -11,6 +11,14 @@ import { checkPalpitesPremiados } from './AmigosDoBichoService.js';
 
 const API_BASE = 'https://api.amigosdobicho.com/raffle-results/filter';
 const PALPITES_URL = 'https://www.resultadofacil.com.br/palpites-do-dia';
+
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0'
+];
 const COTACAO_URL = 'https://amigosdobicho.com/cotacoes';
 const HOROSCOPO_URL = 'https://www.ojogodobicho.com/horoscopo.htm';
 
@@ -52,7 +60,7 @@ export async function fetchResultados(estado: string, date: string = todayStr())
         data = Array.isArray(res.data) ? res.data : [];
     } catch (err: any) {
         apiError = true;
-        log.warn('SCRAPER', `Resultados [${estado}]: API principal falhou. Tentando fallback...`, err.message);
+        log.warn('SCRAPER', `Resultados [${estado}]: API principal falhou. Tentando fallback...`, { error: err.message });
     }
 
     if (data.length === 0) {
@@ -129,6 +137,8 @@ export async function fetchPalpites(useProxy = true): Promise<{
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
         });
         const page = await browser.newPage();
+        const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+        await page.setUserAgent(ua);
 
         if (proxy?.username && proxy?.password) {
             await page.authenticate({ username: proxy.username, password: proxy.password });
@@ -183,47 +193,44 @@ export async function fetchPalpites(useProxy = true): Promise<{
                 await page.goto('https://www.google.com/search?q=site:resultadofacil.com.br+palpites+do+dia', { waitUntil: 'networkidle2', timeout: 20000 });
                 await new Promise(r => setTimeout(r, 3000));
 
-                // Handle Google Consent
-                await page.evaluate(() => {
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    const accept = buttons.find(b => b.innerText.includes('Aceitar') || b.innerText.includes('Accept') || b.innerText.includes('Concordo'));
-                    if (accept) (accept as HTMLElement).click();
-                });
+                if (page.url().includes('google.com/sorry')) {
+                    log.warn('SCRAPER', 'Google bloqueou por CAPTCHA. Pulando para o próximo motor...');
+                } else {
+                    // Handle Google Consent
+                    await page.evaluate(() => {
+                        const buttons = Array.from(document.querySelectorAll('button'));
+                        const accept = buttons.find(b => b.innerText.includes('Aceitar') || b.innerText.includes('Accept') || b.innerText.includes('Concordo'));
+                        if (accept) (accept as HTMLElement).click();
+                    });
 
-                const targetLink = await page.evaluate(() => {
-                    const links = Array.from(document.querySelectorAll('a'));
-                    // Primeiro tenta o link direto
-                    let match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
-                    if (match) return match.href;
-                    // Se não, qualquer link do domínio
-                    match = links.find(a => a.href.includes('resultadofacil.com.br'));
-                    return match ? match.href : null;
-                });
+                    const targetLink = await page.evaluate(() => {
+                        const links = Array.from(document.querySelectorAll('a'));
+                        // Filtra links que não sejam do Google Sorry
+                        let match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia') && !a.href.includes('google.com/sorry'));
+                        if (match) return match.href;
+                        match = links.find(a => a.href.includes('resultadofacil.com.br') && !a.href.includes('google.com/sorry'));
+                        return match ? match.href : null;
+                    });
 
-                if (targetLink) {
-                    log.info('SCRAPER', `Link encontrado no Google (${targetLink}). Navegando...`);
-                    await page.goto(targetLink, { waitUntil: 'networkidle2', timeout: 30000 });
-                    await new Promise(r => setTimeout(r, 4000));
+                    if (targetLink) {
+                        log.info('SCRAPER', `Link encontrado no Google (${targetLink}). Navegando...`);
+                        await page.goto(targetLink, { waitUntil: 'networkidle2', timeout: 30000 });
+                        await new Promise(r => setTimeout(r, 4000));
 
-                    // Se não for a página de palpites, tenta clicar no menu
-                    if (!page.url().includes('palpites-do-dia')) {
-                        log.info('SCRAPER', 'Na home/outro. Procurando link de Palpites na página...');
-                        const clicked = await page.evaluate(() => {
-                            const links = Array.from(document.querySelectorAll('a'));
-                            const pLink = links.find(a => a.innerText.toLowerCase().includes('palpites') || a.href.includes('palpites-do-dia'));
-                            if (pLink) {
-                                (pLink as HTMLElement).click();
-                                return true;
-                            }
-                            return false;
-                        });
-                        if (clicked) {
-                            await new Promise(r => setTimeout(r, 5000));
+                        if (!page.url().includes('palpites-do-dia')) {
+                            log.info('SCRAPER', 'Página secundária. Procurando link de Palpites...');
+                            const clicked = await page.evaluate(() => {
+                                const links = Array.from(document.querySelectorAll('a'));
+                                const pLink = links.find(a => a.innerText.toLowerCase().includes('palpites') || a.href.includes('palpites-do-dia'));
+                                if (pLink) { (pLink as HTMLElement).click(); return true; }
+                                return false;
+                            });
+                            if (clicked) await new Promise(r => setTimeout(r, 5000));
                         }
-                    }
 
-                    html = await page.content();
-                    if (html.length > 5000 && !html.includes('Acesso bloqueado')) recovered = true;
+                        html = await page.content();
+                        if (html.length > 5000 && !html.includes('Acesso bloqueado')) recovered = true;
+                    }
                 }
             } catch (e: any) {
                 log.error('SCRAPER', 'Falha no fallback Google', e.message);
@@ -236,37 +243,36 @@ export async function fetchPalpites(useProxy = true): Promise<{
                     await page.goto('https://www.bing.com/search?q=site:resultadofacil.com.br+palpites+do+dia', { waitUntil: 'networkidle2', timeout: 20000 });
                     await new Promise(r => setTimeout(r, 3000));
 
-                    const bingLink = await page.evaluate(() => {
-                        const links = Array.from(document.querySelectorAll('a'));
-                        let match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia'));
-                        if (match) return match.href;
-                        match = links.find(a => a.href.includes('resultadofacil.com.br'));
-                        return match ? match.href : null;
-                    });
+                    if (page.url().includes('bing.com/ck/ms')) {
+                        log.warn('SCRAPER', 'Bing bloqueou por detecção automática. Abatendo...');
+                    } else {
+                        const bingLink = await page.evaluate(() => {
+                            const links = Array.from(document.querySelectorAll('a'));
+                            let match = links.find(a => a.href.includes('resultadofacil.com.br/palpites-do-dia') && !a.href.includes('bing.com/ck'));
+                            if (match) return match.href;
+                            match = links.find(a => a.href.includes('resultadofacil.com.br') && !a.href.includes('bing.com/ck'));
+                            return match ? match.href : null;
+                        });
 
-                    if (bingLink) {
-                        log.info('SCRAPER', `Link encontrado no Bing (${bingLink}). Navegando...`);
-                        await page.goto(bingLink, { waitUntil: 'networkidle2', timeout: 30000 });
-                        await new Promise(r => setTimeout(r, 4000));
+                        if (bingLink) {
+                            log.info('SCRAPER', `Link encontrado no Bing (${bingLink}). Navegando...`);
+                            await page.goto(bingLink, { waitUntil: 'networkidle2', timeout: 30000 });
+                            await new Promise(r => setTimeout(r, 4000));
 
-                        if (!page.url().includes('palpites-do-dia')) {
-                            log.info('SCRAPER', 'Na home/outro via Bing. Procurando link de Palpites...');
-                            const clickedB = await page.evaluate(() => {
-                                const links = Array.from(document.querySelectorAll('a'));
-                                const pLink = links.find(a => a.innerText.toLowerCase().includes('palpites') || a.href.includes('palpites-do-dia'));
-                                if (pLink) {
-                                    (pLink as HTMLElement).click();
-                                    return true;
-                                }
-                                return false;
-                            });
-                            if (clickedB) {
-                                await new Promise(r => setTimeout(r, 5000));
+                            if (!page.url().includes('palpites-do-dia')) {
+                                log.info('SCRAPER', 'Link secundário via Bing. Procurando palpites...');
+                                const clickedB = await page.evaluate(() => {
+                                    const links = Array.from(document.querySelectorAll('a'));
+                                    const pLink = links.find(a => a.innerText.toLowerCase().includes('palpites') || a.href.includes('palpites-do-dia'));
+                                    if (pLink) { (pLink as HTMLElement).click(); return true; }
+                                    return false;
+                                });
+                                if (clickedB) await new Promise(r => setTimeout(r, 5000));
                             }
-                        }
 
-                        html = await page.content();
-                        if (html.length > 5000 && !html.includes('Acesso bloqueado')) recovered = true;
+                            html = await page.content();
+                            if (html.length > 5000 && !html.includes('Acesso bloqueado')) recovered = true;
+                        }
                     }
                 } catch (e: any) {
                     log.error('SCRAPER', 'Falha no fallback Bing', e.message);

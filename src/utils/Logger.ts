@@ -44,15 +44,20 @@ function formatMessage(cat: LogCategory, msg: string, meta?: Record<string, unkn
 
     let line = `${ts} ${tag} ${cleanMsg}`;
 
-    if (meta && Object.keys(meta).length) {
-        const metaStr = Object.entries(meta)
+    if (meta) {
+        // Fix for character-split bug: ensure meta is an object
+        const safeMeta = (typeof meta === 'object' && meta !== null) ? meta : { info: meta };
+
+        const metaStr = Object.entries(safeMeta)
             .map(([k, v]) => {
                 let val = typeof v === 'object' ? JSON.stringify(v) : String(v);
                 val = val.replace(/\r?\n|\r/g, ' ').trim(); // Avoid empty lines/breaking labels
                 return `${DIM}${k}=${RESET}${val}`;
             })
             .join(' ');
-        line += ` ${metaStr}`;
+        if (metaStr) {
+            line += ` ${metaStr}`;
+        }
     }
     return line;
 }
